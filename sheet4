@@ -1,0 +1,77 @@
+/** Build Sheet4 HTML table: mixed header colors; ALL COLUMNS shown as percent (robust parsing); no-wrap */
+function buildSheet4Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return '';
+
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols);
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return '';
+
+  const header = sh.getRange(1,1,1,lastCol).getValues()[0];
+  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const matchColIdx0 = Math.max(0, CONFIG.sheet4MatchCol - 1);
+  const matches = data.filter(r => {
+    const v = r[matchColIdx0];
+    return v !== null && v !== undefined && String(v).trim() === String(matchValue).trim();
+  });
+  if (matches.length === 0) return '';
+
+  // helper: decide display for a single cell (force percent behavior)
+  function toPercentDisplay(cell) {
+    if (cell === null || cell === undefined || cell === '') return '';
+
+    // if already a string with % at end -> keep
+    if (typeof cell === 'string' && cell.trim().endsWith('%')) {
+      return cell.trim();
+    }
+
+    // normalize strings like " 0.25 " or "25" or "35.0" or "1e-1"
+    let raw = cell;
+    if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
+
+    const n = parseFloat(raw);
+    if (!isNaN(n)) {
+      // if number looks like decimal between -1..1 -> format as decimal => percent
+      if (Math.abs(n) <= 1) {
+        return formatPercent(n);
+      }
+      // otherwise treat as already-percentage number (e.g. 35 -> "35%")
+      // but preserve integer / decimals as-is (no extra rounding beyond conversion to string)
+      return (Number.isInteger(n) ? String(n) : String(n)) + '%';
+    }
+
+    // fallback: return original value (non-numeric text)
+    return cell;
+  }
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+
+  // header row with mixed colors: first 4 orange, next 4 green, rest gray
+  tbl += `<tr style="font-weight:bold;white-space:nowrap;">`;
+  for (let h=0; h<lastCol; h++) {
+    let bg = '#F0F0F0';
+    if (h < 4) bg = '#FFD8A8';
+    else if (h < 8) bg = '#D6F5D6';
+    const hdr = header[h] || '';
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;background:${bg};">${hdr}</th>`;
+  }
+  tbl += `</tr>`;
+
+  // rows: convert every cell to percent display using toPercentDisplay()
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c=0; c<lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      const disp = toPercentDisplay(cell);
+      const align = (c === 0 || c === 1) ? 'left' : 'center';
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};white-space:nowrap;">${disp}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
