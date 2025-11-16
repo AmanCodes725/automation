@@ -1,0 +1,120 @@
+function buildSheet4Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return '';
+
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols);
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return '';
+
+  const header = sh.getRange(1,1,1,lastCol).getValues()[0];
+  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const matchColIdx0 = Math.max(0, CONFIG.sheet4MatchCol - 1);
+  const matches = data.filter(r => String(r[matchColIdx0]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return '';
+
+  function toPercent(cell) {
+    if (cell === null || cell === '') return '';
+    if (typeof cell === 'string' && cell.trim().endsWith('%')) return cell.trim();
+
+    let raw = cell;
+    if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
+
+    const num = parseFloat(raw);
+    if (!isNaN(num)) {
+      if (Math.abs(num) <= 1) return formatPercent(num);
+      return String(num) + '%';
+    }
+    return cell;
+  }
+
+  let tbl = `<p><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" 
+          style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+
+  // HEADER
+  tbl += `<tr style="font-weight:bold;white-space:nowrap;text-align:center;">`;
+  for (let h=0; h<lastCol; h++) {
+    let bg = '#F0F0F0';
+    if (h < 4) bg = '#FFD8A8';
+    else if (h < 8) bg = '#D6F5D6';
+
+    tbl += `<th style="padding:6px;border:1px solid #000;background:${bg};
+             white-space:nowrap;text-align:center;">${header[h] || ''}</th>`;
+  }
+  tbl += `</tr>`;
+
+  // LAST 4 COLUMNS = percent
+  const last4Start = lastCol - 4;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c=0; c<lastCol; c++) {
+
+      const cell = row[c];
+      const disp = (c >= last4Start) ? toPercent(cell) : cell;
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;
+               white-space:nowrap;">${disp}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+
+
+function buildSheet3Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet3Name);
+  if (!sh) return '';
+
+  const lastCol = CONFIG.sheet3TotalCols;
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return '';
+
+  const header = sh.getRange(1,1,1,lastCol).getValues()[0];
+  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const matchColIdx0 = CONFIG.sheet3MatchCol - 1;
+  const matches = data.filter(r => String(r[matchColIdx0]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return '';
+
+  let tbl = `<p><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0"
+          style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+
+  // Header
+  tbl += `<tr style="background:#D9EDF7;font-weight:bold;white-space:nowrap;text-align:center;">`;
+  for (let h=0; h<lastCol; h++) {
+    const style = (h === 4) ? "color:red;" : "";
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;${style}">
+              ${header[h]}
+            </th>`;
+  }
+  tbl += `</tr>`;
+
+  // VALUES
+  const lastIndex = lastCol - 1;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c=0; c<lastCol; c++) {
+
+      let cell = row[c];
+      let disp = (c === lastIndex)
+        ? (typeof cell === 'number' ? formatPercent(cell) : cell)
+        : cell;
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;
+               white-space:nowrap;">${disp}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
