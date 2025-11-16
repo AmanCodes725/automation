@@ -65,6 +65,7 @@ function formatPercent(value) {
 }
 
 /** Build Sheet4 HTML table: mixed header colors; ONLY LAST COLUMN percent; no-wrap */
+/** Build Sheet4 HTML table: mixed header colors; ALL COLUMNS percentage; no-wrap */
 function buildSheet4Table(matchValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(CONFIG.sheet4Name);
@@ -85,37 +86,40 @@ function buildSheet4Table(matchValue) {
   if (matches.length === 0) return '';
 
   let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
-  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" 
+           style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
 
-  // header row with mixed colors: first 4 light orange, next 4 light green, rest light gray
+  // HEADER → orange / green / gray
   tbl += `<tr style="font-weight:bold;white-space:nowrap;">`;
   for (let h=0; h<lastCol; h++) {
     let bg = '#F0F0F0';
-    if (h < 4) bg = '#FFD8A8';      // light orange
-    else if (h < 8) bg = '#D6F5D6'; // light green
-    const hdr = header[h] || '';
-    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;background:${bg};">${hdr}</th>`;
+    if (h < 4) bg = '#FFD8A8';
+    else if (h < 8) bg = '#D6F5D6';
+
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;
+                white-space:nowrap;background:${bg};">${header[h] || ''}</th>`;
   }
   tbl += `</tr>`;
 
-  const lastIndex = lastCol - 1;
+  // ROWS → ALL numeric values in percentage
   matches.forEach(row => {
     tbl += `<tr>`;
     for (let c=0; c<lastCol; c++) {
       const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
 
-      // Only last column should be percentage-formatted
       let disp;
-      if (c === lastIndex) {
-        if (typeof cell === 'string' && cell.trim().endsWith('%')) disp = cell;
-        else if (typeof cell === 'number') disp = formatPercent(cell);
-        else disp = cell;
+      if (typeof cell === 'string' && cell.trim().endsWith('%')) {
+        disp = cell; // already formatted
+      } else if (typeof cell === 'number') {
+        disp = formatPercent(cell); // convert
       } else {
-        disp = cell; // raw
+        disp = cell;
       }
 
       const align = (c === 0 || c === 1) ? 'left' : 'center';
-      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};white-space:nowrap;">${disp}</td>`;
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};
+               white-space:nowrap;">${disp}</td>`;
     }
     tbl += `</tr>`;
   });
@@ -123,6 +127,7 @@ function buildSheet4Table(matchValue) {
   tbl += `</table>`;
   return tbl;
 }
+
 
 /** Build Sheet3 HTML table: light-blue header, 5th header red; ONLY LAST COLUMN percent; no-wrap */
 function buildSheet3Table(matchValue) {
