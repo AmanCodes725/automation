@@ -1,0 +1,41 @@
+function getSheet4ConditionMessage(storeId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return "";
+
+  const lastCol = CONFIG.sheet4TotalCols;
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return "";
+
+  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const matchCol = CONFIG.sheet4MatchCol - 1; // ID column index
+  const colE = 4; // Column E index (0-based)
+
+  // Find matching row
+  for (let i=0; i<data.length; i++) {
+    if (String(data[i][matchCol]).trim() === String(storeId).trim()) {
+
+      const val = data[i][colE];
+
+      // auto-clean strings like "99.5%" → 99.5
+      let num = val;
+      if (typeof val === 'string' && val.endsWith('%')) {
+        num = parseFloat(val.replace('%','')) ;
+      }
+
+      // Convert decimals like 0.995 → 99.5
+      if (typeof num === 'number' && num <= 1 && num >= -1) {
+        num = num * 100;
+      }
+
+      if (num > 99.50) {
+        return "All KPIs are healthy. Please continue the good work.";
+      } else {
+        return "Immediate action required. KPIs are below threshold.";
+      }
+    }
+  }
+
+  return "";
+}
