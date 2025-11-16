@@ -1,10 +1,97 @@
+/*********************** CONFIG - update names if needed *************************/
+const CONFIG_SIMPLE = {
+  mappingSheetName: 'Mapping',                      // sheet with Store_ID (col A) and mapping data
+  mappingIdCol: 1,                                  // A = 1 (Store_ID)
+  mappingPodMailCol: 9,                             // I = 9 (Pod_Mail_ID)
+  mappingStartRow: 2,                               // first data row in Mapping (row #)
+
+  targetSheetName: 'Weekly_View by Contribution',   // sheet where B3 lives
+  targetControlCellA1: 'B3',                        // control cell to set Store ID
+
+  dataBlockStartRow: 8,                             // data table starts at row 8
+  dataBlockStartCol: 1,                             // A = 1
+  dataBlockNumCols: 7,                              // columns A..G
+
+  sortBySheetColumn: 4,                             // D = 4 (sort by column D)
+  sortAscending: false,                             // descending order
+  waitAfterSetMs: 2000,                             // wait after setting B3 for formulas to recalc
+  waitAfterSortMs: 400,                             // wait after sort
+
+  // Additional sheets to include as HTML tables in the email:
+  additionalStoreSheetName: 'Sheet3',   // (sheet that contains STORE_ID column)
+  storeKeyColumnName: 'STORE_ID',       // header name of store id column in additionalStoreSheet
+
+  additionalPodSheetName: 'Sheet4',     // (sheet that contains POD ID column)
+  podKeyColumnName: 'POD ID'            // header name of pod id column in additionalPodSheet
+};
+/**********************************************************************************/
+
+/** onOpen: adds custom menu */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('FTR Audit')
+    .addItem('Run Audit', 'processFirst25StoreIds_SortD_Email')
+    .addToUi();
+}
+
+/** Format numbers for email table:
+ * - strings ending with '%' returned unchanged
+ * - positive numbers 0..1 -> percent with up to 2 decimals
+ * - negative numbers -1..0 -> percent with 1 decimal and minus sign
+ * - other numbers returned as-is
+ */
+function formatPercent(value) {
+  if (value === null || value === "") return "";
+
+  if (typeof value === "string" && value.trim().endsWith("%")) {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    if (value < 0 && value > -1) {
+      const pct = value * 100;
+      const rounded = Math.round(pct * 10) / 10; // 1 decimal
+      return rounded.toString() + "%";
+    }
+    if (value >= 0 && value <= 1) {
+      const pct = value * 100;
+      const rounded = Math.round(pct * 100) / 100; // up to 2 decimals
+      // avoid extraneous zeros
+      return (Number(rounded).toString()) + "%";
+    }
+    return value;
+  }
+
+  return value;
+}
+
+/** Ensure Top20 output sheet exists and has header row */
+function ensureTop20Sheet(ss, sheetName, headersWithKeys) {
+  let sh = ss.getSheetByName(sheetName);
+  if (!sh) sh = ss.insertSheet(sheetName);
+  // check if header exists (simple check)
+  const existing = sh.getRange(1, 1, 1, headersWithKeys.length).getValues()[0];
+  const blank = existing.every(c => c === '' || c === null);
+  if (blank) {
+    sh.getRange(1, 1, 1, headersWithKeys.length).setValues([headersWithKeys]);
+  }
+  return sh;
+}
+
+/**
+ * Build an HTML table for rows in sheetName where the column header `keyColName`
+ * equals keyValue. Returns empty string if no matches.
+ * Uses header row at row 1.
+ */
 function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(sheetName);
-  if (!sh) return ''; // sheet missing
+  if (!sh) return ''; // sheet missing: skip silently
 
-  // header row (row 1)
-  const headerRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  // header (row 1)
+  const lastCol = sh.getLastColumn();
+  if (lastCol === 0) return '';
+  const headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
 
   // find key column index (case-insensitive)
   let keyIndex = -1;
@@ -17,9 +104,10 @@ function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   }
   if (keyIndex === -1) return ''; // key column not found
 
+  // read data rows
   const lastRow = sh.getLastRow();
   if (lastRow < 2) return '';
-  const data = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+  const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
   // filter rows where key column equals keyValue
   const matches = data.filter(r => {
@@ -28,11 +116,11 @@ function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   });
   if (matches.length === 0) return '';
 
-  // build HTML table
+  // build HTML table (yellow header, left-align first two cols)
   let tbl = '<p style="margin-top:12px;"><b>' + sheetName + ' - Matching rows for ' + keyColName + ': ' + keyValue + '</b></p>';
   tbl += '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-family:Arial; font-size:13px; width:100%;">';
   tbl += '<tr style="background:#FFFF00; font-weight:bold;">';
-  for (let h=0; h<headerRow.length; h++) {
+  for (let h = 0; h < headerRow.length; h++) {
     tbl += `<th style="padding:6px; border:1px solid #000; text-align:center;">${headerRow[h]||''}</th>`;
   }
   tbl += '</tr>';
@@ -40,9 +128,8 @@ function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   matches.forEach(row => {
     tbl += '<tr>';
     for (let c = 0; c < row.length; c++) {
-      const cell = row[c] === null || row[c] === undefined ? '' : row[c];
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
       const align = (c === 0 || c === 1) ? 'left' : 'center';
-      // reuse your existing formatter if number
       const disp = (typeof cell === 'number') ? formatPercent(cell) : cell;
       tbl += `<td style="padding:6px; border:1px solid #000; text-align:${align};">${disp}</td>`;
     }
@@ -53,42 +140,198 @@ function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   return tbl;
 }
 
+/** Main function */
+function processFirst25StoreIds_SortD_Email() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const map = ss.getSheetByName(CONFIG_SIMPLE.mappingSheetName);
+  const tgt = ss.getSheetByName(CONFIG_SIMPLE.targetSheetName);
+  if (!map) throw new Error('Mapping sheet not found: ' + CONFIG_SIMPLE.mappingSheetName);
+  if (!tgt) throw new Error('Target sheet not found: ' + CONFIG_SIMPLE.targetSheetName);
 
-additionalStoreSheetName: 'Sheet3',   // sheet that contains STORE_ID column
-  storeKeyColumnName: 'STORE_ID',       // header text for store key in that sheet
-
-  additionalPodSheetName: 'Sheet4',     // sheet that contains POD ID column
-  podKeyColumnName: 'POD ID',      
-
-
-
-
-
-
-const additionalStoreSheet = CONFIG_SIMPLE.additionalStoreSheetName;
-const storeKeyCol = CONFIG_SIMPLE.storeKeyColumnName;
-const additionalPodSheet = CONFIG_SIMPLE.additionalPodSheetName;
-const podKeyCol = CONFIG_SIMPLE.podKeyColumnName;
-let extraTablesHtml = '';
-try {
-  if (additionalStoreSheet && storeKeyCol) {
-    // storeIdStr is the string store id you already have in your loop
-    const t1 = buildHtmlTableForSheetMatches(additionalStoreSheet, storeKeyCol, storeIdStr);
-    if (t1) extraTablesHtml += t1;
+  const MAX_IDS = 25;
+  const lastMapRow = map.getLastRow();
+  const avail = Math.max(0, lastMapRow - CONFIG_SIMPLE.mappingStartRow + 1);
+  const toRead = Math.min(MAX_IDS, avail);
+  if (toRead <= 0) {
+    SpreadsheetApp.getUi().alert('No Store IDs found in Mapping sheet.');
+    return;
   }
-} catch(e) {
+
+  // read mapping block (read at least columns up to mappingPodMailCol)
+  const mapCols = Math.max(CONFIG_SIMPLE.mappingPodMailCol, CONFIG_SIMPLE.mappingIdCol, 9);
+  const mapVals = map.getRange(CONFIG_SIMPLE.mappingStartRow, 1, toRead, mapCols).getValues();
+
+  // Results log
+  let results = ss.getSheetByName('Results');
+  if (!results) results = ss.insertSheet('Results');
+  if (results.getLastRow() === 0) results.appendRow(['Timestamp','StoreID','POD_ID','SentTo','RowsSent','Notes']);
+
+  // iterate mapping rows
+  for (let i = 0; i < mapVals.length; i++) {
+    const row = mapVals[i];
+    const rawId = row[CONFIG_SIMPLE.mappingIdCol - 1];
+    if (!rawId || String(rawId).trim() === '') continue;
+    const storeIdStr = String(rawId).trim();
+    const podId = row[1] ? String(row[1]).trim() : '';    // mapping col B (pod id/name)
+
+    // emails from mapping (E,F,G,H,I -> index 4..8)
+    const SM_EMAIL = row[4] ? String(row[4]).trim() : '';
+    const COM_EMAIL = row[5] ? String(row[5]).trim() : '';
+    const DCH_EMAIL = row[6] ? String(row[6]).trim() : '';
+    const PIM_EMAIL = row[7] ? String(row[7]).trim() : '';
+    const POD_MAIL = row[8] ? String(row[8]).trim() : '';
+
+    try {
+      // safely set B3 (control cell) removing validation if present
+      const controlRange = tgt.getRange(CONFIG_SIMPLE.targetControlCellA1);
+      const oldValidation = controlRange.getDataValidation();
+      try { if (oldValidation) controlRange.setDataValidation(null); } catch(e){}
+      controlRange.setValue(storeIdStr);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG_SIMPLE.waitAfterSetMs);
+      try { if (oldValidation) controlRange.setDataValidation(oldValidation); } catch(e){}
+
+      // sort data block A8:G? by column D
+      const lastRow = tgt.getLastRow();
+      if (lastRow < CONFIG_SIMPLE.dataBlockStartRow) {
+        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'No data rows']);
+        continue;
+      }
+      const numRows = lastRow - CONFIG_SIMPLE.dataBlockStartRow + 1;
+      const rng = tgt.getRange(CONFIG_SIMPLE.dataBlockStartRow, CONFIG_SIMPLE.dataBlockStartCol, numRows, CONFIG_SIMPLE.dataBlockNumCols);
+      rng.sort({ column: CONFIG_SIMPLE.sortBySheetColumn, ascending: CONFIG_SIMPLE.sortAscending });
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG_SIMPLE.waitAfterSortMs);
+
+      // read sorted values, take first 20
+      const allVals = rng.getValues();
+      const first20 = allVals.slice(0, 20);
+
+      // filter: column D not blank AND not all D/E/F/G zero
+      const colD = 3, colE = 4, colF = 5, colG = 6; // relative to A..G (0-based)
+      const visible = first20.filter(rw => {
+        const d = rw[colD];
+        if (d === null || String(d).trim() === '') return false;
+        const dNum = Number(rw[colD]);
+        const eNum = Number(rw[colE]);
+        const fNum = Number(rw[colF]);
+        const gNum = Number(rw[colG]);
+        const allZero = (!isNaN(dNum) ? dNum : null) === 0 &&
+                        (!isNaN(eNum) ? eNum : null) === 0 &&
+                        (!isNaN(fNum) ? fNum : null) === 0 &&
+                        (!isNaN(gNum) ? gNum : null) === 0;
+        return !allZero;
+      });
+
+      // build headers row from sheet (row above dataBlockStartRow)
+      let headers = [];
+      try {
+        headers = tgt.getRange(CONFIG_SIMPLE.dataBlockStartRow - 1, CONFIG_SIMPLE.dataBlockStartCol, 1, CONFIG_SIMPLE.dataBlockNumCols).getValues()[0];
+      } catch(e) {
+        headers = Array.from({length: CONFIG_SIMPLE.dataBlockNumCols}, (_,k) => 'Col' + (k+1));
+      }
+
+      // Write Top20 to archive sheets
+      const fullHeader = ['Store_ID','POD_ID'].concat(headers);
+      const outByStore = ensureTop20Sheet(ss, 'Top20_ByStoreID', fullHeader);
+      const outByPod   = ensureTop20Sheet(ss, 'Top20_ByPodID', fullHeader);
+
+      const rowsToAppend = visible.map(v => {
+        const cleaned = v.map(c => (c === null || c === undefined) ? '' : c);
+        return [storeIdStr, podId || POD_MAIL || ''].concat(cleaned);
+      });
+      if (rowsToAppend.length > 0) {
+        outByStore.getRange(outByStore.getLastRow()+1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+        outByPod.getRange(outByPod.getLastRow()+1, 1, rowsToAppend.length, rowsToAppend[0].length).setValues(rowsToAppend);
+      }
+
+      // Build Top-20 HTML table
+      let html = '<p><b>Instant audit needed</b></p>';
+      html += '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-family:Arial; font-size:13px; width:100%;">';
+      html += '<tr style="background:#FFFF00; font-weight:bold;">';
+      headers.forEach(h => {
+        html += `<th style="padding:6px; border:1px solid #000; text-align:center;">${h||''}</th>`;
+      });
+      html += '</tr>';
+      visible.forEach(rowVals => {
+        html += '<tr>';
+        rowVals.forEach((cell, idx) => {
+          const display = formatPercent(cell);
+          if (idx === 0 || idx === 1) {
+            html += `<td style="padding:6px; border:1px solid #000; text-align:left;">${display}</td>`;
+          } else {
+            html += `<td style="padding:6px; border:1px solid #000; text-align:center;">${display}</td>`;
+          }
+        });
+        html += '</tr>';
+      });
+      html += '</table>';
+
+      // === Build extra tables from additional sheets (STORE and POD) ===
+      let extraTablesHtml = '';
+
+      try {
+        const storeSheetName = CONFIG_SIMPLE.additionalStoreSheetName;
+        const storeKeyCol = CONFIG_SIMPLE.storeKeyColumnName;
+        if (storeSheetName && storeKeyCol && storeIdStr) {
+          const t1 = buildHtmlTableForSheetMatches(storeSheetName, storeKeyCol, storeIdStr);
+          if (t1) extraTablesHtml += t1;
+        }
+      } catch(e) {
+        // log to Results sheet
+        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'Error building store extra table: ' + (e.message || e)]);
+      }
+
+      try {
+        const podSheetName = CONFIG_SIMPLE.additionalPodSheetName;
+        const podKeyCol = CONFIG_SIMPLE.podKeyColumnName;
+        const podKeyValue = podId || (row[8] ? String(row[8]).trim() : '');
+        if (podSheetName && podKeyCol && podKeyValue) {
+          const t2 = buildHtmlTableForSheetMatches(podSheetName, podKeyCol, podKeyValue);
+          if (t2) extraTablesHtml += t2;
+        }
+      } catch(e) {
+        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'Error building pod extra table: ' + (e.message || e)]);
+      }
+
+      // Footer and extra tables
+      const footerHtml = extraTablesHtml +
+        '<p><br>Thanks & Regards,<br>Aman Shah<br>Instamart OPS Team</p>';
+
+      // Prepare email recipients
+      const toList = [];
+      if (SM_EMAIL) toList.push(SM_EMAIL);
+      if (POD_MAIL) toList.push(POD_MAIL);
+
+      const ccList = [];
+      if (COM_EMAIL) ccList.push(COM_EMAIL);
+      if (DCH_EMAIL) ccList.push(DCH_EMAIL);
+      if (PIM_EMAIL) ccList.push(PIM_EMAIL);
+
+      const recipientTo = toList.join(',');
+      const recipientCc = ccList.join(',');
+
+      // Send email if we have recipients
+      if ((recipientTo && recipientTo.indexOf('@') !== -1) || (recipientCc && recipientCc.indexOf('@') !== -1)) {
+        const subject = `Weekly Audit Required: Store ${storeIdStr}`;
+        MailApp.sendEmail({
+          to: recipientTo || '',
+          cc: recipientCc || '',
+          subject: subject,
+          htmlBody: html + footerHtml,
+          body: 'Instant audit needed - view as HTML email'
+        });
+      }
+
+      // Log results
+      results.appendRow([new Date(), storeIdStr, podId || POD_MAIL || '', recipientTo, visible.length, 'Email sent / Top20 saved']);
+    } catch (err) {
+      // write error and continue
+      results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'ERROR: ' + (err && err.message ? err.message : String(err))]);
+    }
+
+    Utilities.sleep(300); // small pause before next store
+  } // end mapping rows
+
+  SpreadsheetApp.getUi().alert('Done. Processed up to ' + toRead + ' Store IDs. Check Results and Top20 sheets.');
 }
-
-try {
-  // use podId from mapping row (or fallback to POD_MAIL in row[8])
-  const podKeyValue = podId || (row[8] ? String(row[8]).trim() : '');
-  if (additionalPodSheet && podKeyCol) {
-    const t2 = buildHtmlTableForSheetMatches(additionalPodSheet, podKeyCol, podKeyValue);
-    if (t2) extraTablesHtml += t2;
-  }
-} catch(e) {
-
-}
-
-html += extraTablesHtml;
-
