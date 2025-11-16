@@ -59,3 +59,36 @@ additionalStoreSheetName: 'Sheet3',   // sheet that contains STORE_ID column
 
   additionalPodSheetName: 'Sheet4',     // sheet that contains POD ID column
   podKeyColumnName: 'POD ID',      
+
+
+
+
+
+
+const additionalStoreSheet = CONFIG_SIMPLE.additionalStoreSheetName;
+const storeKeyCol = CONFIG_SIMPLE.storeKeyColumnName;
+const additionalPodSheet = CONFIG_SIMPLE.additionalPodSheetName;
+const podKeyCol = CONFIG_SIMPLE.podKeyColumnName;
+let extraTablesHtml = '';
+try {
+  if (additionalStoreSheet && storeKeyCol) {
+    // storeIdStr is the string store id you already have in your loop
+    const t1 = buildHtmlTableForSheetMatches(additionalStoreSheet, storeKeyCol, storeIdStr);
+    if (t1) extraTablesHtml += t1;
+  }
+} catch(e) {
+}
+
+try {
+  // use podId from mapping row (or fallback to POD_MAIL in row[8])
+  const podKeyValue = podId || (row[8] ? String(row[8]).trim() : '');
+  if (additionalPodSheet && podKeyCol) {
+    const t2 = buildHtmlTableForSheetMatches(additionalPodSheet, podKeyCol, podKeyValue);
+    if (t2) extraTablesHtml += t2;
+  }
+} catch(e) {
+
+}
+
+html += extraTablesHtml;
+
