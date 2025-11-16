@@ -1,0 +1,390 @@
+/*********************** CONFIG *************************/
+const CONFIG = {
+  mappingSheet: 'Mapping',
+  mappingStartRow: 2,
+  mappingColsToRead: 9,
+
+  weeklySheet: 'Weekly_View by Contribution',
+  controlCell: 'B3',
+
+  dataStartRow: 8,
+  dataStartCol: 1,
+  dataNumCols: 7,
+
+  sortColumn: 4,        // weekly sort by column D
+  sortAscending: false,
+
+  waitAfterSetMs: 2000,
+  waitAfterSortMs: 400,
+
+  sheet3Name: 'Sheet3',
+  sheet3MatchCol: 1,
+  sheet3TotalCols: 11,
+
+  sheet4Name: 'Sheet4',
+  sheet4MatchCol: 2,
+  sheet4TotalCols: 8,
+
+  // top-N and extra CCs
+  topN: 5,
+  extraCC1: 'extra1@example.com',
+  extraCC2: 'extra2@example.com'
+};
+/*********************************************************/
+
+const FOOTER_NAME = 'Aman Shah';
+const FOOTER_TEAM = 'Instamart OPS Team';
+
+/************* MENU *************/
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('FTR Audit')
+    .addItem('Run Audit', 'processFirst25StoreIds_SortD_Email')
+    .addToUi();
+}
+
+/************* PERCENT FORMAT LOGIC *************/
+function formatPercent(value) {
+  if (value === null || value === "") return "";
+  if (typeof value === 'string' && value.trim().endsWith('%')) return value;
+  if (typeof value === 'number') {
+    if (value < 0 && value > -1) {
+      const pct = value * 100;
+      return (Math.round(pct * 10) / 10) + '%';
+    }
+    if (value >= 0 && value <= 1) {
+      const pct = value * 100;
+      return (Math.round(pct * 100) / 100) + '%';
+    }
+    return value;
+  }
+  return value;
+}
+
+/************* SHEET4 CONDITION MESSAGE *************/
+function getSheet4ConditionMessage(storeId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return "";
+
+  const data = sh.getDataRange().getValues();
+  const matchCol = CONFIG.sheet4MatchCol - 1;
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][matchCol]).trim() === String(storeId).trim()) {
+
+      let v = data[i][4]; // Column E (0-based index)
+      if (typeof v === 'string' && v.endsWith('%')) {
+        v = parseFloat(v.replace('%', ''));
+      }
+
+      if (typeof v === 'number' && Math.abs(v) <= 1) v = v * 100;
+
+      if (v > 99.5) {
+        return "All KPIs are healthy. Please continue the good work.";
+      } else {
+        return "Immediate action required. KPIs are below threshold.";
+      }
+    }
+  }
+  return "";
+}
+
+/************* SORT SHEET4 BY COLUMN E *************/
+function sortSheet4ByE() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return;
+
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2) return;
+
+  // sort data rows (row 2..end) by column E (5)
+  try {
+    sh.getRange(2, 1, lastRow - 1, Math.max(lastCol, 1)).sort({ column: 5, ascending: true });
+  } catch (e) {
+    Logger.log('sortSheet4ByE error: ' + (e && e.message ? e.message : e));
+  }
+}
+
+/************* HELPER: is storeId in top-N rows of Sheet4 (after sort) *************/
+function isStoreInSheet4TopN(storeId, topN) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return false;
+
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return false;
+
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols || sh.getLastColumn());
+  // number of rows to read from top (limit to available)
+  const rowsToRead = Math.min(topN, lastRow - 1);
+  if (rowsToRead <= 0) return false;
+
+  const topRows = sh.getRange(2, 1, rowsToRead, lastCol).getValues();
+  const matchCol = (CONFIG.sheet4MatchCol || 2) - 1;
+
+  for (let i = 0; i < topRows.length; i++) {
+    const v = topRows[i][matchCol];
+    if (v !== null && v !== undefined && String(v).trim() === String(storeId).trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/************* BUILD SHEET4 TABLE *************/
+function buildSheet4Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return "";
+
+  const sheetLastCol = sh.getLastColumn();
+  const lastCol = Math.min(sheetLastCol, CONFIG.sheet4TotalCols || sheetLastCol);
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return "";
+
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  const matchCol = CONFIG.sheet4MatchCol - 1;
+  const matches = data.filter(r => String(r[matchCol]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return "";
+
+  const last4Start = Math.max(0, lastCol - 4);
+
+  function toPercent(val) {
+    if (val === "" || val === null || val === undefined) return "";
+    if (typeof val === 'string' && val.trim().endsWith('%')) return val.trim();
+
+    let raw = val;
+    if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
+    const n = parseFloat(raw);
+    if (isNaN(n)) return val;
+    if (Math.abs(n) <= 1) return formatPercent(n);
+    return String(n) + "%";
+  }
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+
+  // header colors: first 4 orange, next 4 green, rest gray
+  tbl += `<tr style="font-weight:bold;text-align:center;">`;
+  for (let h = 0; h < lastCol; h++) {
+    let bg = "#F0F0F0";
+    if (h < 4) bg = "#FFD8A8";
+    else if (h < 8) bg = "#D6F5D6";
+    tbl += `<th style="padding:6px;border:1px solid #000;background:${bg};white-space:nowrap;text-align:center;">${header[h]||''}</th>`;
+  }
+  tbl += `</tr>`;
+
+  // rows: first columns raw, last 4 as percent
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      const display = (c >= last4Start) ? toPercent(cell) : cell;
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+/************* BUILD SHEET3 TABLE *************/
+function buildSheet3Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet3Name);
+  if (!sh) return "";
+
+  const sheetLastCol = sh.getLastColumn();
+  const lastCol = Math.min(sheetLastCol, CONFIG.sheet3TotalCols || sheetLastCol);
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return "";
+
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  const matchCol = CONFIG.sheet3MatchCol - 1;
+  const matches = data.filter(r => String(r[matchCol]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return "";
+
+  const lastIndex = lastCol - 1;
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+
+  // header: light-blue, 5th header red
+  tbl += `<tr style="background:#D9EDF7;font-weight:bold;text-align:center;">`;
+  for (let h = 0; h < lastCol; h++) {
+    const extra = (h === 4) ? "color:red;" : "";
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;${extra}">${header[h]||''}</th>`;
+  }
+  tbl += `</tr>`;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      const display = (c === lastIndex)
+        ? (typeof cell === 'string' && cell.trim().endsWith('%') ? cell.trim() :
+           (typeof cell === 'number' ? formatPercent(cell) :
+            ( !isNaN(parseFloat(String(cell).replace(/,/g,''))) ? (Math.abs(parseFloat(String(cell).replace(/,/g,''))) <= 1 ? formatPercent(parseFloat(String(cell).replace(/,/g,''))) : String(parseFloat(String(cell).replace(/,/g,''))) + '%' ) : cell )))
+        : cell;
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+/************* MAIN PROCESS *************/
+function processFirst25StoreIds_SortD_Email() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const map = ss.getSheetByName(CONFIG.mappingSheet);
+  const weekly = ss.getSheetByName(CONFIG.weeklySheet);
+  if (!map) throw new Error('Mapping sheet not found: ' + CONFIG.mappingSheet);
+  if (!weekly) throw new Error('Weekly sheet not found: ' + CONFIG.weeklySheet);
+
+  // ensure Results
+  let results = ss.getSheetByName("Results");
+  if (!results) results = ss.insertSheet("Results");
+  if (results.getLastRow() === 0)
+    results.appendRow(["Timestamp","StoreID","PodID","To","RowsSent","Notes"]);
+
+  const last = map.getLastRow();
+  const count = Math.max(0, last - (CONFIG.mappingStartRow - 1));
+  const rows = map.getRange(CONFIG.mappingStartRow, 1, count, CONFIG.mappingColsToRead).getValues();
+
+  for (let i = 0; i < rows.length; i++) {
+    const storeId = String(rows[i][0] || "").trim();
+    const podId = String(rows[i][1] || "").trim();
+    if (!storeId) continue;
+
+    const SM = rows[i][4] || "";
+    const COM = rows[i][5] || "";
+    const DCH = rows[i][6] || "";
+    const PIM = rows[i][7] || "";
+    const POD = rows[i][8] || "";
+
+    try {
+      // set control cell B3 safely
+      const ctrl = weekly.getRange(CONFIG.controlCell);
+      const oldDV = ctrl.getDataValidation();
+      try { if (oldDV) ctrl.setDataValidation(null); } catch(e){}
+      ctrl.setValue(storeId);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSetMs);
+      try { if (oldDV) ctrl.setDataValidation(oldDV); } catch(e){}
+
+      // sort weekly A8:G by column D
+      const lastWeeklyRow = weekly.getLastRow();
+      if (lastWeeklyRow >= CONFIG.dataStartRow) {
+        const rng = weekly.getRange(CONFIG.dataStartRow, CONFIG.dataStartCol, lastWeeklyRow - CONFIG.dataStartRow + 1, CONFIG.dataNumCols);
+        rng.sort({ column: CONFIG.sortColumn, ascending: CONFIG.sortAscending });
+        SpreadsheetApp.flush();
+        Utilities.sleep(CONFIG.waitAfterSortMs);
+      }
+
+      // read first topN (previously top20) rows from weekly for main table (we keep 20 by default)
+      const allVals = (weekly.getLastRow() >= CONFIG.dataStartRow)
+        ? weekly.getRange(CONFIG.dataStartRow, CONFIG.dataStartCol, Math.max(0, weekly.getLastRow()-CONFIG.dataStartRow+1), CONFIG.dataNumCols).getValues()
+        : [];
+      const firstN = allVals.slice(0, CONFIG.topN); // use CONFIG.topN here if you want consistency, but main table count can be adjusted
+      const first20 = allVals.slice(0, 20); // keep main visible logic same (you can change to topN if required)
+
+      // for compatibility keep "visible" definition same as before (filter out blank or all zeros)
+      const firstForVisible = first20;
+      const visible = firstForVisible.filter(r => {
+        const d = r[3];
+        if (d === null || d === '') return false;
+        const nums = [r[3], r[4], r[5], r[6]].map(Number);
+        return !nums.every(n => n === 0);
+      });
+
+      // Build email HTML
+      let emailHtml = "";
+      emailHtml += `<p style="font-size:14px;">Hi POD,</p>`;
+      emailHtml += `<p style="font-size:13px;">${getSheet4ConditionMessage(storeId)}</p>`;
+
+      // Sort sheet4 by E before taking top-N check and before building its table
+      sortSheet4ByE();
+
+      // Decide extra CC based on whether storeId appears in top-N rows of Sheet4
+      const topN = Number(CONFIG.topN || 5);
+      const storeInTopN = isStoreInSheet4TopN(storeId, topN);
+
+      // Build Sheet4 and Sheet3 HTML (Sheet4 first)
+      const sheet4Html = buildSheet4Table(storeId);
+      if (sheet4Html) emailHtml += sheet4Html;
+
+      const sheet3Html = buildSheet3Table(storeId);
+      if (sheet3Html) emailHtml += sheet3Html;
+
+      // Instant audit main table (A, B, D) — keep using visible (top 20 filtered)
+      emailHtml += `<p><b>Instant audit needed</b></p>
+        <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">
+        <tr style="background:#FFFF00;font-weight:bold;text-align:center;">
+          <th style="border:1px solid #000;text-align:center;">L2 Category</th>
+          <th style="border:1px solid #000;text-align:center;">L1 Category</th>
+          <th style="border:1px solid #000;text-align:center;">Contribution</th>
+        </tr>`;
+
+      visible.forEach(r => {
+        const d = r[3];
+        const dDisplay = (typeof d === "string" && d.trim().endsWith('%')) ? d : ((typeof d === "number") ? formatPercent(d) : d);
+        emailHtml += `<tr>
+          <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${r[0] || ""}</td>
+          <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${r[1] || ""}</td>
+          <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${dDisplay}</td>
+        </tr>`;
+      });
+
+      emailHtml += `</table>`;
+
+      emailHtml += `<p><br>Thanks & Regards,<br>${FOOTER_NAME}<br>${FOOTER_TEAM}</p>`;
+
+      // Build recipients
+      const toList = [];
+      if (SM) toList.push(SM);
+      if (POD) toList.push(POD);
+
+      const ccList = [];
+      if (COM) ccList.push(COM);
+      if (DCH) ccList.push(DCH);
+      if (PIM) ccList.push(PIM);
+
+      // add extra CCs only if store is present in top-N rows of sheet4 after sort
+      if (storeInTopN) {
+        if (CONFIG.extraCC1) ccList.push(CONFIG.extraCC1);
+        if (CONFIG.extraCC2) ccList.push(CONFIG.extraCC2);
+      }
+
+      const toStr = toList.filter(x => x && x.includes('@')).join(',');
+      const ccStr = ccList.filter(x => x && x.includes('@')).join(',');
+
+      // send email
+      MailApp.sendEmail({
+        to: toStr,
+        cc: ccStr,
+        subject: `Weekly Audit Required: Store ${storeId}`,
+        htmlBody: emailHtml
+      });
+
+      results.appendRow([new Date(), storeId, podId, toStr, visible.length, storeInTopN ? "Sent + extraCC" : "Sent"]);
+
+    } catch (err) {
+      results.appendRow([new Date(), storeId, podId, "", 0, 'ERROR: '+ (err && err.message ? err.message : String(err))]);
+    }
+
+    Utilities.sleep(300);
+  } // end for
+
+  SpreadsheetApp.getUi().alert('Done — processed mapping rows.');
+}
