@@ -1,62 +1,332 @@
+/*********************** CONFIG *************************/
+const CONFIG = {
+  mappingSheet: 'Mapping',
+  mappingStartRow: 2,
+  mappingColsToRead: 9,
 
-  extraCC1: 'first.cc@example.com',
-  extraCC2: 'second.cc@example.com',
+  weeklySheet: 'Weekly_View by Contribution',
+  controlCell: 'B3',
 
+  dataStartRow: 8,
+  dataStartCol: 1,
+  dataNumCols: 7,
 
+  sortColumn: 4,
+  sortAscending: false,
 
-/** Sort Sheet4 by column E (5) ascending to prepare top rows */
+  waitAfterSetMs: 2000,
+  waitAfterSortMs: 400,
+
+  sheet3Name: 'Sheet3',
+  sheet3MatchCol: 1,
+  sheet3TotalCols: 11,
+
+  sheet4Name: 'Sheet4',
+  sheet4MatchCol: 2,
+  sheet4TotalCols: 8,
+
+  // Extra CC for FULL TOP 20 rows
+  extraCC1: 'extra1@example.com',
+  extraCC2: 'extra2@example.com'
+};
+/*********************************************************/
+
+const FOOTER_NAME = 'Aman Shah';
+const FOOTER_TEAM = 'Instamart OPS Team';
+
+/************* MENU *************/
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('FTR Audit')
+    .addItem('Run Audit', 'processFirst25StoreIds_SortD_Email')
+    .addToUi();
+}
+
+/************* PERCENT FORMAT LOGIC *************/
+function formatPercent(value) {
+  if (value === null || value === "") return "";
+
+  if (typeof value === 'string' && value.trim().endsWith('%')) return value;
+
+  if (typeof value === 'number') {
+    if (value < 0 && value > -1) {
+      const pct = value * 100;
+      return (Math.round(pct * 10) / 10) + '%';
+    }
+    if (value >= 0 && value <= 1) {
+      const pct = value * 100;
+      return (Math.round(pct * 100) / 100) + '%';
+    }
+    return value;
+  }
+  return value;
+}
+
+/************* SHEET4 CONDITION MESSAGE *************/
+function getSheet4ConditionMessage(storeId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return "";
+
+  const data = sh.getDataRange().getValues();
+  const matchCol = CONFIG.sheet4MatchCol - 1;
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][matchCol]).trim() === String(storeId).trim()) {
+
+      let v = data[i][4]; // Column E (0-based index)
+      if (typeof v === 'string' && v.endsWith('%')) {
+        v = parseFloat(v.replace('%', ''));
+      }
+
+      if (typeof v === 'number' && v <= 1) v = v * 100;
+
+      if (v > 99.5) {
+        return "All KPIs are healthy. Please continue the good work.";
+      } else {
+        return "Immediate action required. KPIs are below threshold.";
+      }
+    }
+  }
+  return "";
+}
+
+/************* SORT SHEET4 BY COLUMN E *************/
 function sortSheet4ByE() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(CONFIG.sheet4Name);
   if (!sh) return;
+
   const lastRow = sh.getLastRow();
   const lastCol = sh.getLastColumn();
   if (lastRow < 2) return;
-  // assume header in row 1, data from row 2..lastRow
-  try {
-    sh.getRange(2, 1, lastRow - 1, Math.max(lastCol, 1)).sort({ column: 5, ascending: true });
-  } catch (e) {
-    // safe fallback: do nothing on error
-    Logger.log('sortSheet4ByE error: ' + (e && e.message ? e.message : e));
+
+  sh.getRange(2, 1, lastRow - 1, lastCol)
+    .sort({ column: 5, ascending: true });
+}
+
+/************* BUILD SHEET4 TABLE *************/
+function buildSheet4Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return "";
+
+  const lastCol = CONFIG.sheet4TotalCols;
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, lastCol).getValues();
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+
+  const matchCol = CONFIG.sheet4MatchCol - 1;
+  const matches = data.filter(r => String(r[matchCol]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return "";
+
+  const last4Start = lastCol - 4;
+
+  function toPercent(val) {
+    if (val === "" || val === null) return "";
+    if (typeof val === 'string' && val.endsWith('%')) return val;
+
+    let num = parseFloat(val);
+    if (isNaN(num)) return val;
+
+    if (num <= 1 && num >= -1) return formatPercent(num);
+    return String(num) + "%";
   }
+
+  let tbl = `<p><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>
+             <table border="1" cellpadding="6" cellspacing="0"
+             style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+
+  tbl += `<tr style="font-weight:bold;text-align:center;">`;
+
+  for (let h = 0; h < lastCol; h++) {
+    let bg = "#F0F0F0";
+    if (h < 4) bg = "#FFD8A8";
+    else if (h < 8) bg = "#D6F5D6";
+
+    tbl += `<th style="padding:6px;border:1px solid #000;background:${bg};white-space:nowrap;text-align:center;">${header[h]}</th>`;
+  }
+  tbl += `</tr>`;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      let display = (c >= last4Start) ? toPercent(row[c]) : row[c];
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
 }
 
+/************* BUILD SHEET3 TABLE *************/
+function buildSheet3Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet3Name);
+  if (!sh) return "";
 
+  const lastCol = CONFIG.sheet3TotalCols;
+  const data = sh.getRange(2, 1, sh.getLastRow() - 1, lastCol).getValues();
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
 
+  const matchCol = CONFIG.sheet3MatchCol - 1;
+  const matches = data.filter(r => String(r[matchCol]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return "";
 
+  const lastIndex = lastCol - 1;
 
-// 1) Sort Sheet4 by E ascending, then build Sheet4 table
-try {
-  sortSheet4ByE();
-} catch(e) {
-  // ignore sort errors
+  let tbl = `<p><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>
+             <table border="1" cellpadding="6" cellspacing="0"
+             style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+
+  tbl += `<tr style="background:#D9EDF7;font-weight:bold;text-align:center;">`;
+  for (let h = 0; h < lastCol; h++) {
+    const extra = (h === 4) ? "color:red;" : "";
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;${extra}">${header[h]}</th>`;
+  }
+  tbl += `</tr>`;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      let display = (c === lastIndex && typeof row[c] === "number")
+        ? formatPercent(row[c])
+        : row[c];
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
 }
-const sheet4Html = buildSheet4Table(storeId);
-if (sheet4Html) emailHtml += sheet4Html;
 
+/************* MAIN PROCESS *************/
+function processFirst25StoreIds_SortD_Email() {
 
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const map = ss.getSheetByName(CONFIG.mappingSheet);
+  const weekly = ss.getSheetByName(CONFIG.weeklySheet);
 
+  let results = ss.getSheetByName("Results");
+  if (!results) results = ss.insertSheet("Results");
+  if (results.getLastRow() === 0)
+    results.appendRow(["Timestamp","StoreID","PodID","To","RowsSent","Notes"]);
 
+  const last = map.getLastRow();
+  const count = Math.min(25, last - 1);
+  const rows = map.getRange(2, 1, count, CONFIG.mappingColsToRead).getValues();
 
+  for (let i = 0; i < rows.length; i++) {
 
+    const storeId = String(rows[i][0] || "").trim();
+    const podId = String(rows[i][1] || "").trim();
 
+    const SM = rows[i][4];
+    const COM = rows[i][5];
+    const DCH = rows[i][6];
+    const PIM = rows[i][7];
+    const POD = rows[i][8];
 
+    try {
+      let ctrl = weekly.getRange(CONFIG.controlCell);
+      const dv = ctrl.getDataValidation();
+      try { ctrl.setDataValidation(null); } catch(e){}
+      ctrl.setValue(storeId);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSetMs);
+      try { ctrl.setDataValidation(dv); } catch(e){}
 
+      // Sort Weekly_View by column D
+      const lastRow = weekly.getLastRow();
+      const rng = weekly.getRange(8, 1, lastRow - 7, 7);
+      rng.sort({ column: CONFIG.sortColumn, ascending: CONFIG.sortAscending });
 
-const toList = [];
-if (SM_EMAIL) toList.push(SM_EMAIL);
-if (POD_MAIL) toList.push(POD_MAIL);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSortMs);
 
-const ccList = [];
-if (COM_EMAIL) ccList.push(COM_EMAIL);
-if (DCH_EMAIL) ccList.push(DCH_EMAIL);
-if (PIM_EMAIL) ccList.push(PIM_EMAIL);
+      const allVals = rng.getValues();
+      const first20 = allVals.slice(0, 20);
 
-// if top-20 is full, add manual extra CCs from config
-if (Array.isArray(visible) && visible.length >= 20) {
-  if (CONFIG.extraCC1) ccList.push(CONFIG.extraCC1);
-  if (CONFIG.extraCC2) ccList.push(CONFIG.extraCC2);
+      const visible = first20.filter(r => {
+        const d = r[3];
+        if (d === null || d === '') return false;
+        const nums = [r[3], r[4], r[5], r[6]].map(Number);
+        return !nums.every(n => n === 0);
+      });
+
+      let emailHtml = "";
+
+      emailHtml += `<p style="font-size:14px;">Hi POD,</p>`;
+      emailHtml += `<p style="font-size:13px;">${getSheet4ConditionMessage(storeId)}</p>`;
+
+      sortSheet4ByE();
+
+      const sheet4Html = buildSheet4Table(storeId);
+      if (sheet4Html) emailHtml += sheet4Html;
+
+      const sheet3Html = buildSheet3Table(storeId);
+      if (sheet3Html) emailHtml += sheet3Html;
+
+      // Main Instant Audit Table
+      emailHtml += `<p><b>Instant audit needed</b></p>
+        <table border="1" cellpadding="6" cellspacing="0"
+        style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">
+        <tr style="background:#FFFF00;font-weight:bold;text-align:center;">
+          <th style="border:1px solid #000;text-align:center;">L2 Category</th>
+          <th style="border:1px solid #000;text-align:center;">L1 Category</th>
+          <th style="border:1px solid #000;text-align:center;">Contribution</th>
+        </tr>`;
+
+      visible.forEach(r => {
+        const d = r[3];
+        const dDisplay = (typeof d === "number") ? formatPercent(d) : d;
+
+        emailHtml += `
+          <tr>
+            <td style="border:1px solid #000;text-align:center;">${r[0] || ""}</td>
+            <td style="border:1px solid #000;text-align:center;">${r[1] || ""}</td>
+            <td style="border:1px solid #000;text-align:center;">${dDisplay}</td>
+          </tr>`;
+      });
+
+      emailHtml += `</table>`;
+
+      emailHtml += `<p><br>Thanks & Regards,<br>${FOOTER_NAME}<br>${FOOTER_TEAM}</p>`;
+
+      // Build recipients
+      const toList = [];
+      if (SM) toList.push(SM);
+      if (POD) toList.push(POD);
+
+      const ccList = [];
+      if (COM) ccList.push(COM);
+      if (DCH) ccList.push(DCH);
+      if (PIM) ccList.push(PIM);
+
+      if (visible.length === 20) {
+        if (CONFIG.extraCC1) ccList.push(CONFIG.extraCC1);
+        if (CONFIG.extraCC2) ccList.push(CONFIG.extraCC2);
+      }
+
+      const toStr = toList.join(",");
+      const ccStr = ccList.join(",");
+
+      MailApp.sendEmail({
+        to: toStr,
+        cc: ccStr,
+        subject: `Weekly Audit Required: Store ${storeId}`,
+        htmlBody: emailHtml
+      });
+
+      results.appendRow([new Date(), storeId, podId, toStr, visible.length, "OK"]);
+
+    } catch (err) {
+      results.appendRow([new Date(), storeId, podId, "", 0, err.message]);
+    }
+  }
+
+  SpreadsheetApp.getUi().alert("Done — Processed all 25 stores!");
 }
-
-const toStr = toList.filter(x=>x && x.includes('@')).join(',');
-const ccStr = ccList.filter(x=>x && x.includes('@')).join(',');
