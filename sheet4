@@ -1,4 +1,9 @@
-/** Build Sheet4 HTML table: mixed header colors; ALL COLUMNS shown as percent (robust parsing); no-wrap */
+/** Build Sheet4 HTML table:
+ *  - Mixed header colors
+ *  - ONLY LAST 4 COLUMNS are percentage
+ *  - First 4 columns RAW
+ *  - No wrap
+ */
 function buildSheet4Table(matchValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(CONFIG.sheet4Name);
@@ -18,56 +23,69 @@ function buildSheet4Table(matchValue) {
   });
   if (matches.length === 0) return '';
 
-  // helper: decide display for a single cell (force percent behavior)
-  function toPercentDisplay(cell) {
+  // -----------------------------
+  // Helper: convert to percent for last 4 columns only
+  // -----------------------------
+  function toPercent(cell) {
     if (cell === null || cell === undefined || cell === '') return '';
 
-    // if already a string with % at end -> keep
     if (typeof cell === 'string' && cell.trim().endsWith('%')) {
-      return cell.trim();
+      return cell.trim(); // already percentage
     }
 
-    // normalize strings like " 0.25 " or "25" or "35.0" or "1e-1"
     let raw = cell;
     if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
-
     const n = parseFloat(raw);
     if (!isNaN(n)) {
-      // if number looks like decimal between -1..1 -> format as decimal => percent
-      if (Math.abs(n) <= 1) {
-        return formatPercent(n);
-      }
-      // otherwise treat as already-percentage number (e.g. 35 -> "35%")
-      // but preserve integer / decimals as-is (no extra rounding beyond conversion to string)
-      return (Number.isInteger(n) ? String(n) : String(n)) + '%';
+      if (Math.abs(n) <= 1) return formatPercent(n);   // decimal → percent
+      return String(n) + '%';                          // integer treated as percent
     }
 
-    // fallback: return original value (non-numeric text)
     return cell;
   }
 
   let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
-  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0"
+           style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
 
-  // header row with mixed colors: first 4 orange, next 4 green, rest gray
+  // -----------------------------
+  // HEADER ROW COLORS
+  // -----------------------------
   tbl += `<tr style="font-weight:bold;white-space:nowrap;">`;
   for (let h=0; h<lastCol; h++) {
     let bg = '#F0F0F0';
-    if (h < 4) bg = '#FFD8A8';
-    else if (h < 8) bg = '#D6F5D6';
-    const hdr = header[h] || '';
-    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;background:${bg};">${hdr}</th>`;
+    if (h < 4) bg = '#FFD8A8';      // first 4 orange
+    else if (h < 8) bg = '#D6F5D6'; // next 4 green
+
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;
+             white-space:nowrap;background:${bg};">${header[h] || ''}</th>`;
   }
   tbl += `</tr>`;
 
-  // rows: convert every cell to percent display using toPercentDisplay()
+  const last4Start = lastCol - 4; // ← Only last 4 columns are percentage
+
+  // -----------------------------
+  // ROW VALUES
+  // -----------------------------
   matches.forEach(row => {
     tbl += `<tr>`;
     for (let c=0; c<lastCol; c++) {
+
       const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
-      const disp = toPercentDisplay(cell);
+
+      let disp;
+      if (c >= last4Start) {
+        // Last 4 columns → percentage
+        disp = toPercent(cell);
+      } else {
+        // First columns → RAW
+        disp = cell;
+      }
+
       const align = (c === 0 || c === 1) ? 'left' : 'center';
-      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};white-space:nowrap;">${disp}</td>`;
+
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};
+               white-space:nowrap;">${disp}</td>`;
     }
     tbl += `</tr>`;
   });
