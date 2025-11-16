@@ -1,0 +1,62 @@
+
+  extraCC1: 'first.cc@example.com',
+  extraCC2: 'second.cc@example.com',
+
+
+
+/** Sort Sheet4 by column E (5) ascending to prepare top rows */
+function sortSheet4ByE() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return;
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2) return;
+  // assume header in row 1, data from row 2..lastRow
+  try {
+    sh.getRange(2, 1, lastRow - 1, Math.max(lastCol, 1)).sort({ column: 5, ascending: true });
+  } catch (e) {
+    // safe fallback: do nothing on error
+    Logger.log('sortSheet4ByE error: ' + (e && e.message ? e.message : e));
+  }
+}
+
+
+
+
+
+// 1) Sort Sheet4 by E ascending, then build Sheet4 table
+try {
+  sortSheet4ByE();
+} catch(e) {
+  // ignore sort errors
+}
+const sheet4Html = buildSheet4Table(storeId);
+if (sheet4Html) emailHtml += sheet4Html;
+
+
+
+
+
+
+
+
+
+
+const toList = [];
+if (SM_EMAIL) toList.push(SM_EMAIL);
+if (POD_MAIL) toList.push(POD_MAIL);
+
+const ccList = [];
+if (COM_EMAIL) ccList.push(COM_EMAIL);
+if (DCH_EMAIL) ccList.push(DCH_EMAIL);
+if (PIM_EMAIL) ccList.push(PIM_EMAIL);
+
+// if top-20 is full, add manual extra CCs from config
+if (Array.isArray(visible) && visible.length >= 20) {
+  if (CONFIG.extraCC1) ccList.push(CONFIG.extraCC1);
+  if (CONFIG.extraCC2) ccList.push(CONFIG.extraCC2);
+}
+
+const toStr = toList.filter(x=>x && x.includes('@')).join(',');
+const ccStr = ccList.filter(x=>x && x.includes('@')).join(',');
