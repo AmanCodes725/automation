@@ -1,51 +1,320 @@
-function buildHtmlTableByColIndex(sheetName, colIndexOneBased, keyValue) {
+/*********************** CONFIG *************************/
+const CONFIG = {
+  mappingSheet: 'Mapping',
+  mappingStartRow: 2,
+  mappingColsToRead: 9, // read at least A..I for mapping
+
+  weeklySheet: 'Weekly_View by Contribution',
+  controlCell: 'B3',
+
+  dataStartRow: 8,
+  dataStartCol: 1,
+  dataNumCols: 7,       // A..G
+
+  sortColumn: 4,        // D
+  sortAscending: false,
+
+  waitAfterSetMs: 2000,
+  waitAfterSortMs: 400,
+
+  sheet3Name: 'Sheet3', // sheet3: match by column A (1) — has 11 columns total
+  sheet3MatchCol: 1,
+  sheet3TotalCols: 11,  // used for header styling and last-col percentage
+
+  sheet4Name: 'Sheet4', // sheet4: match by column B (2) — has 8 columns total
+  sheet4MatchCol: 2,
+  sheet4TotalCols: 8
+};
+/*********************************************************/
+
+/** Footer editable */
+const FOOTER_NAME = 'Aman Shah';
+const FOOTER_TEAM = 'Instamart OPS Team';
+
+/** Add custom menu */
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('FTR Audit')
+    .addItem('Run Audit', 'processFirst25StoreIds_SortD_Email')
+    .addToUi();
+}
+
+/** Format percentages / numbers for email table
+ * - strings ending with '%' returned unchanged
+ * - positive numbers 0..1 -> percent with up to 2 decimals
+ * - negative numbers -1..0 -> percent with 1 decimal and minus sign
+ * - other numbers returned as-is
+ */
+function formatPercent(value) {
+  if (value === null || value === "") return "";
+  if (typeof value === 'string' && value.trim().endsWith('%')) return value;
+  if (typeof value === 'number') {
+    if (value < 0 && value > -1) {
+      const pct = value * 100;
+      const rounded = Math.round(pct * 10) / 10; // 1 decimal
+      return rounded.toString() + '%';
+    }
+    if (value >= 0 && value <= 1) {
+      const pct = value * 100;
+      const rounded = Math.round(pct * 100) / 100; // up to 2 decimals
+      return Number(rounded).toString() + '%';
+    }
+    return value;
+  }
+  return value;
+}
+
+/** Build Sheet4 HTML table: header light blue, 5th header text red, numeric -> percent, no-wrap */
+function buildSheet4Table(matchValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(sheetName);
-  if (!sh) return ''; // sheet missing
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return '';
 
-  const lastCol = sh.getLastColumn();
-  if (lastCol === 0) return '';
-  const headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
-
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols);
   const lastRow = sh.getLastRow();
-  if (lastRow < 2) return '';
+  if (lastCol === 0 || lastRow < 2) return '';
+
+  // header row
+  const header = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+  // data
   const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
-  const colIndex0 = Math.max(0, colIndexOneBased - 1);
+  const matchColIdx0 = Math.max(0, CONFIG.sheet4MatchCol - 1);
   const matches = data.filter(r => {
-    const val = r[colIndex0];
-    return (val !== null && val !== undefined && String(val).trim() === String(keyValue).trim());
+    const v = r[matchColIdx0];
+    return v !== null && v !== undefined && String(v).trim() === String(matchValue).trim();
   });
   if (matches.length === 0) return '';
 
-  let tbl = '<p style="margin-top:12px;"><b>' + sheetName + ' - Matching rows for ID: ' + keyValue + '</b></p>';
-  tbl += '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-family:Arial; font-size:13px; width:100%;">';
-  tbl += '<tr style="background:#FFFF00; font-weight:bold;">';
+  // build HTML
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
 
-  for (let h = 0; h < headerRow.length; h++) {
-    tbl += `<th style="padding:6px; border:1px solid #000; text-align:center;">${headerRow[h]||''}</th>`;
+  // header: light blue; 5th header text red (index 4)
+  tbl += `<tr style="background:#D9EDF7;font-weight:bold;white-space:nowrap;">`;
+  for (let h=0; h<lastCol; h++) {
+    const hdr = header[h] || '';
+    const extraStyle = (h === 4) ? 'color:red;' : '';
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;${extraStyle}">${hdr}</th>`;
   }
-  tbl += '</tr>';
+  tbl += `</tr>`;
 
+  // rows
   matches.forEach(row => {
-    tbl += '<tr>';
-    for (let c = 0; c < row.length; c++) {
+    tbl += `<tr>`;
+    for (let c=0; c<lastCol; c++) {
       const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      const disp = (typeof cell === 'number') ? formatPercent(cell) : cell;
+      // left align first two cols, center others (consistent with earlier style)
       const align = (c === 0 || c === 1) ? 'left' : 'center';
-
-      // ❗ RAW numbers only for Sheet3
-      let disp;
-      if (sheetName === CONFIG_ADDITIONAL.sheet3Name) {
-        disp = cell; // no percentage formatting
-      } else {
-        disp = (typeof cell === 'number') ? formatPercent(cell) : cell;
-      }
-
-      tbl += `<td style="padding:6px; border:1px solid #000; text-align:${align};">${disp}</td>`;
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};white-space:nowrap;">${disp}</td>`;
     }
-    tbl += '</tr>';
+    tbl += `</tr>`;
   });
 
-  tbl += '</table>';
+  tbl += `</table>`;
   return tbl;
+}
+
+/** Build Sheet3 HTML table: first 4 headers light orange, next 4 light green, remaining light gray.
+ *  All columns raw except LAST column formatted as percentage. No wrap.
+ */
+function buildSheet3Table(matchValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet3Name);
+  if (!sh) return '';
+
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet3TotalCols);
+  const lastRow = sh.getLastRow();
+  if (lastCol === 0 || lastRow < 2) return '';
+
+  const header = sh.getRange(1,1,1,lastCol).getValues()[0];
+  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  const matchColIdx0 = Math.max(0, CONFIG.sheet3MatchCol - 1);
+  const matches = data.filter(r => {
+    const v = r[matchColIdx0];
+    return v !== null && v !== undefined && String(v).trim() === String(matchValue).trim();
+  });
+  if (matches.length === 0) return '';
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+
+  // header row with mixed colors
+  tbl += `<tr style="font-weight:bold;white-space:nowrap;">`;
+  for (let h=0; h<lastCol; h++) {
+    let bg = '#F0F0F0'; // default light gray for extra columns
+    if (h < 4) bg = '#FFD8A8';      // light orange for first 4
+    else if (h < 8) bg = '#D6F5D6'; // light green for next 4
+    const hdr = header[h] || '';
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;background:${bg};">${hdr}</th>`;
+  }
+  tbl += `</tr>`;
+
+  // rows: raw values for all columns except last column -> percentage
+  const lastIndex = lastCol - 1;
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c=0; c<lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      let disp;
+      if (c === lastIndex) {
+        // last column -> percentage if numeric, else raw
+        disp = (typeof cell === 'number') ? formatPercent(cell) : cell;
+      } else {
+        disp = cell; // raw
+      }
+      const align = (c === 0 || c === 1) ? 'left' : 'center';
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:${align};white-space:nowrap;">${disp}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+/** Main loop */
+function processFirst25StoreIds_SortD_Email() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const map = ss.getSheetByName(CONFIG.mappingSheet);
+  const weekly = ss.getSheetByName(CONFIG.weeklySheet);
+  if (!map) throw new Error('Mapping sheet not found: ' + CONFIG.mappingSheet);
+  if (!weekly) throw new Error('Weekly sheet not found: ' + CONFIG.weeklySheet);
+
+  // ensure Results
+  let results = ss.getSheetByName('Results');
+  if (!results) results = ss.insertSheet('Results');
+  if (results.getLastRow() === 0) results.appendRow(['Timestamp','StoreID','PodID','To','RowsSent','Notes']);
+
+  // read mapping rows (up to 25)
+  const lastMapRow = map.getLastRow();
+  const mapCount = Math.max(0, lastMapRow - CONFIG.mappingStartRow + 1);
+  const toRead = Math.min(25, mapCount);
+  if (toRead <= 0) {
+    SpreadsheetApp.getUi().alert('No mapping rows found.');
+    return;
+  }
+  const mapVals = map.getRange(CONFIG.mappingStartRow, 1, toRead, CONFIG.mappingColsToRead).getValues();
+
+  for (let i=0; i<mapVals.length; i++) {
+    const row = mapVals[i];
+    const storeId = row[0] ? String(row[0]).trim() : '';
+    if (!storeId) continue;
+    const podId = row[1] ? String(row[1]).trim() : '';
+
+    const SM_EMAIL = row[4] ? String(row[4]).trim() : '';
+    const COM_EMAIL = row[5] ? String(row[5]).trim() : '';
+    const DCH_EMAIL = row[6] ? String(row[6]).trim() : '';
+    const PIM_EMAIL = row[7] ? String(row[7]).trim() : '';
+    const POD_MAIL = row[8] ? String(row[8]).trim() : '';
+
+    try {
+      // safely set B3
+      const ctrl = weekly.getRange(CONFIG.controlCell);
+      const oldVal = ctrl.getDataValidation();
+      try { if (oldVal) ctrl.setDataValidation(null); } catch(e){}
+      ctrl.setValue(storeId);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSetMs);
+      try { if (oldVal) ctrl.setDataValidation(oldVal); } catch(e){}
+
+      // sort A8:G<last>
+      const lastRow = weekly.getLastRow();
+      if (lastRow < CONFIG.dataStartRow) {
+        results.appendRow([new Date(), storeId, podId, '', 0, 'No data in weekly']);
+        continue;
+      }
+      const numRows = lastRow - CONFIG.dataStartRow + 1;
+      const rng = weekly.getRange(CONFIG.dataStartRow, CONFIG.dataStartCol, numRows, CONFIG.dataNumCols);
+      rng.sort({ column: CONFIG.sortColumn, ascending: CONFIG.sortAscending });
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSortMs);
+
+      // read first 20 rows
+      const allVals = rng.getValues();
+      const first20 = allVals.slice(0,20);
+
+      // filter where D not blank and not all D/E/F/G zero
+      const visible = first20.filter(rw => {
+        const d = rw[3];
+        if (d === null || d === '') return false;
+        const nums = [rw[3], rw[4], rw[5], rw[6]].map(v => Number(v));
+        const allZero = nums.every(n => !isNaN(n) && n === 0);
+        return !allZero;
+      });
+
+      // BUILD EMAIL HTML in order: Sheet4, Sheet3, Main table
+      let emailHtml = '';
+
+      // 1) Sheet4 table first
+      const sheet4Html = buildSheet4Table(storeId);
+      if (sheet4Html) emailHtml += sheet4Html;
+
+      // 2) Sheet3 table next
+      const sheet3Html = buildSheet3Table(storeId);
+      if (sheet3Html) emailHtml += sheet3Html;
+
+      // 3) Instant audit needed main table (only A, B, D) with headers manually set (yellow)
+      emailHtml += `<p style="margin-top:12px;"><b>Instant audit needed</b></p>`;
+      emailHtml += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
+      emailHtml += `<tr style="background:#FFFF00;font-weight:bold;white-space:nowrap;">`;
+      emailHtml += `<th style="padding:6px;border:1px solid #000;text-align:left;white-space:nowrap;">L2 Category</th>`;
+      emailHtml += `<th style="padding:6px;border:1px solid #000;text-align:left;white-space:nowrap;">L1 Category</th>`;
+      emailHtml += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">Contribution</th>`;
+      emailHtml += `</tr>`;
+
+      visible.forEach(rw => {
+        const a = rw[0] === null || rw[0] === undefined ? '' : rw[0];
+        const b = rw[1] === null || rw[1] === undefined ? '' : rw[1];
+        const d = rw[3] === null || rw[3] === undefined ? '' : rw[3];
+        const dDisp = (typeof d === 'number') ? formatPercent(d) : d;
+        emailHtml += `<tr>`;
+        emailHtml += `<td style="padding:6px;border:1px solid #000;text-align:left;white-space:nowrap;">${a}</td>`;
+        emailHtml += `<td style="padding:6px;border:1px solid #000;text-align:left;white-space:nowrap;">${b}</td>`;
+        emailHtml += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${dDisp}</td>`;
+        emailHtml += `</tr>`;
+      });
+
+      emailHtml += `</table>`;
+
+      // Footer
+      emailHtml += `<p><br>Thanks & Regards,<br>${FOOTER_NAME}<br>${FOOTER_TEAM}</p>`;
+
+      // Prepare recipients
+      const toList = [];
+      if (SM_EMAIL) toList.push(SM_EMAIL);
+      if (POD_MAIL) toList.push(POD_MAIL);
+      const ccList = [];
+      if (COM_EMAIL) ccList.push(COM_EMAIL);
+      if (DCH_EMAIL) ccList.push(DCH_EMAIL);
+      if (PIM_EMAIL) ccList.push(PIM_EMAIL);
+
+      const toStr = toList.filter(x=>x && x.includes('@')).join(',');
+      const ccStr = ccList.filter(x=>x && x.includes('@')).join(',');
+
+      // send email (if any valid recipient)
+      if (toStr || ccStr) {
+        MailApp.sendEmail({
+          to: toStr || '',
+          cc: ccStr || '',
+          subject: `Weekly Audit Required: Store ${storeId}`,
+          htmlBody: emailHtml,
+          body: 'Instant audit needed - view as HTML'
+        });
+      }
+
+      // log
+      results.appendRow([new Date(), storeId, podId, toStr, visible.length, 'Sent / OK']);
+
+    } catch (err) {
+      results.appendRow([new Date(), storeId, podId, '', 0, 'ERROR: ' + (err && err.message ? err.message : String(err))]);
+      // continue next
+    }
+
+    Utilities.sleep(300);
+  } // end for mapping rows
+
+  SpreadsheetApp.getUi().alert('Done — processed up to 25 stores. Check Results sheet.');
 }
