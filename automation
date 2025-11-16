@@ -15,16 +15,20 @@ const CONFIG_SIMPLE = {
   sortBySheetColumn: 4,                             // D = 4 (sort by column D)
   sortAscending: false,                             // descending order
   waitAfterSetMs: 2000,                             // wait after setting B3 for formulas to recalc
-  waitAfterSortMs: 400,                             // wait after sort
-
-  // Additional sheets to include as HTML tables in the email:
-  additionalStoreSheetName: 'Sheet3',   // (sheet that contains STORE_ID column)
-  storeKeyColumnName: 'STORE_ID',       // header name of store id column in additionalStoreSheet
-
-  additionalPodSheetName: 'Sheet4',     // (sheet that contains POD ID column)
-  podKeyColumnName: 'POD ID'            // header name of pod id column in additionalPodSheet
+  waitAfterSortMs: 400                              // wait after sort
+};
+/* Additional (sheet names for extra tables) */
+const CONFIG_ADDITIONAL = {
+  sheet3Name: 'Sheet3',   // Sheet3 - match by column A (1)
+  sheet3ColIndex: 1,      // 1-based column index in Sheet3 to match (A=1)
+  sheet4Name: 'Sheet4',   // Sheet4 - match by column B (2)
+  sheet4ColIndex: 2       // 1-based column index in Sheet4 to match (B=2)
 };
 /**********************************************************************************/
+
+/** Footer text editable */
+const FOOTER_NAME = 'Aman Shah';
+const FOOTER_TEAM = 'Instamart OPS Team';
 
 /** onOpen: adds custom menu */
 function onOpen() {
@@ -56,8 +60,7 @@ function formatPercent(value) {
     if (value >= 0 && value <= 1) {
       const pct = value * 100;
       const rounded = Math.round(pct * 100) / 100; // up to 2 decimals
-      // avoid extraneous zeros
-      return (Number(rounded).toString()) + "%";
+      return Number(rounded).toString() + "%";
     }
     return value;
   }
@@ -79,45 +82,32 @@ function ensureTop20Sheet(ss, sheetName, headersWithKeys) {
 }
 
 /**
- * Build an HTML table for rows in sheetName where the column header `keyColName`
- * equals keyValue. Returns empty string if no matches.
+ * Build an HTML table for rows in sheetName where the column (1-based) colIndex matches keyValue.
+ * Returns empty string if no matches or sheet missing.
  * Uses header row at row 1.
  */
-function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
+function buildHtmlTableByColIndex(sheetName, colIndexOneBased, keyValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sh = ss.getSheetByName(sheetName);
-  if (!sh) return ''; // sheet missing: skip silently
+  if (!sh) return ''; // sheet missing
 
-  // header (row 1)
   const lastCol = sh.getLastColumn();
   if (lastCol === 0) return '';
   const headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
 
-  // find key column index (case-insensitive)
-  let keyIndex = -1;
-  for (let i = 0; i < headerRow.length; i++) {
-    if (!headerRow[i]) continue;
-    if (String(headerRow[i]).trim().toLowerCase() === String(keyColName).trim().toLowerCase()) {
-      keyIndex = i;
-      break;
-    }
-  }
-  if (keyIndex === -1) return ''; // key column not found
-
-  // read data rows
   const lastRow = sh.getLastRow();
   if (lastRow < 2) return '';
   const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
-  // filter rows where key column equals keyValue
+  const colIndex0 = Math.max(0, colIndexOneBased - 1);
   const matches = data.filter(r => {
-    const cell = r[keyIndex];
-    return (cell !== null && cell !== undefined && String(cell).trim() === String(keyValue).trim());
+    const val = r[colIndex0];
+    return (val !== null && val !== undefined && String(val).trim() === String(keyValue).trim());
   });
   if (matches.length === 0) return '';
 
-  // build HTML table (yellow header, left-align first two cols)
-  let tbl = '<p style="margin-top:12px;"><b>' + sheetName + ' - Matching rows for ' + keyColName + ': ' + keyValue + '</b></p>';
+  // build HTML table (yellow header)
+  let tbl = '<p style="margin-top:12px;"><b>' + sheetName + ' - Matching rows for ID: ' + keyValue + '</b></p>';
   tbl += '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-family:Arial; font-size:13px; width:100%;">';
   tbl += '<tr style="background:#FFFF00; font-weight:bold;">';
   for (let h = 0; h < headerRow.length; h++) {
@@ -267,36 +257,24 @@ function processFirst25StoreIds_SortD_Email() {
       });
       html += '</table>';
 
-      // === Build extra tables from additional sheets (STORE and POD) ===
-      let extraTablesHtml = '';
-
+      // ---- ADD: extra tables from Sheet3 (col A) and Sheet4 (col B) ----
       try {
-        const storeSheetName = CONFIG_SIMPLE.additionalStoreSheetName;
-        const storeKeyCol = CONFIG_SIMPLE.storeKeyColumnName;
-        if (storeSheetName && storeKeyCol && storeIdStr) {
-          const t1 = buildHtmlTableForSheetMatches(storeSheetName, storeKeyCol, storeIdStr);
-          if (t1) extraTablesHtml += t1;
-        }
-      } catch(e) {
-        // log to Results sheet
-        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'Error building store extra table: ' + (e.message || e)]);
-      }
+        const sid = storeIdStr;
+        // Sheet3: match by column 1 (A)
+        const t3 = buildHtmlTableByColIndex(CONFIG_ADDITIONAL.sheet3Name, CONFIG_ADDITIONAL.sheet3ColIndex, sid);
+        if (t3) html += t3;
 
-      try {
-        const podSheetName = CONFIG_SIMPLE.additionalPodSheetName;
-        const podKeyCol = CONFIG_SIMPLE.podKeyColumnName;
-        const podKeyValue = podId || (row[8] ? String(row[8]).trim() : '');
-        if (podSheetName && podKeyCol && podKeyValue) {
-          const t2 = buildHtmlTableForSheetMatches(podSheetName, podKeyCol, podKeyValue);
-          if (t2) extraTablesHtml += t2;
-        }
-      } catch(e) {
-        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'Error building pod extra table: ' + (e.message || e)]);
+        // Sheet4: match by column 2 (B)
+        const t4 = buildHtmlTableByColIndex(CONFIG_ADDITIONAL.sheet4Name, CONFIG_ADDITIONAL.sheet4ColIndex, sid);
+        if (t4) html += t4;
+      } catch (e) {
+        // log to Results but continue
+        results.appendRow([new Date(), storeIdStr, podId || '', '', 0, 'ExtraTables error: ' + (e && e.message ? e.message : String(e))]);
       }
+      // ---- END extra tables ----
 
-      // Footer and extra tables
-      const footerHtml = extraTablesHtml +
-        '<p><br>Thanks & Regards,<br>Aman Shah<br>Instamart OPS Team</p>';
+      // Footer
+      const footerHtml = '<p><br>Thanks & Regards,<br>' + FOOTER_NAME + '<br>' + FOOTER_TEAM + '</p>';
 
       // Prepare email recipients
       const toList = [];
