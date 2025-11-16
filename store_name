@@ -1,0 +1,23 @@
+function getSheet4ColumnCValue(storeId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName("Sheet4");
+  if (!sh) return "";   // sheet not found
+
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return "";  // no data
+
+  // Column C = 3rd column
+  const data = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+
+  // Match column (ID column)
+  const matchCol = 2 - 1;      // CONFIG.sheet4MatchCol = 2 → index 1
+
+  for (let i = 0; i < data.length; i++) {
+    const rowId = String(data[i][matchCol]).trim();
+    if (rowId === String(storeId).trim()) {
+      return data[i][2];       // Column C (index 2)
+    }
+  }
+
+  return ""; // not found
+}
