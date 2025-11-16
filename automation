@@ -1,0 +1,54 @@
+function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(sheetName);
+  if (!sh) return ''; // sheet missing
+
+  // header row (row 1)
+  const headerRow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+
+  // find key column index (case-insensitive)
+  let keyIndex = -1;
+  for (let i = 0; i < headerRow.length; i++) {
+    if (!headerRow[i]) continue;
+    if (String(headerRow[i]).trim().toLowerCase() === String(keyColName).trim().toLowerCase()) {
+      keyIndex = i;
+      break;
+    }
+  }
+  if (keyIndex === -1) return ''; // key column not found
+
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return '';
+  const data = sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).getValues();
+
+  // filter rows where key column equals keyValue
+  const matches = data.filter(r => {
+    const cell = r[keyIndex];
+    return (cell !== null && cell !== undefined && String(cell).trim() === String(keyValue).trim());
+  });
+  if (matches.length === 0) return '';
+
+  // build HTML table
+  let tbl = '<p style="margin-top:12px;"><b>' + sheetName + ' - Matching rows for ' + keyColName + ': ' + keyValue + '</b></p>';
+  tbl += '<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-family:Arial; font-size:13px; width:100%;">';
+  tbl += '<tr style="background:#FFFF00; font-weight:bold;">';
+  for (let h=0; h<headerRow.length; h++) {
+    tbl += `<th style="padding:6px; border:1px solid #000; text-align:center;">${headerRow[h]||''}</th>`;
+  }
+  tbl += '</tr>';
+
+  matches.forEach(row => {
+    tbl += '<tr>';
+    for (let c = 0; c < row.length; c++) {
+      const cell = row[c] === null || row[c] === undefined ? '' : row[c];
+      const align = (c === 0 || c === 1) ? 'left' : 'center';
+      // reuse your existing formatter if number
+      const disp = (typeof cell === 'number') ? formatPercent(cell) : cell;
+      tbl += `<td style="padding:6px; border:1px solid #000; text-align:${align};">${disp}</td>`;
+    }
+    tbl += '</tr>';
+  });
+
+  tbl += '</table>';
+  return tbl;
+}
