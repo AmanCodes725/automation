@@ -1,0 +1,17 @@
+const CONFIG = {
+  mappingSheet: 'Mapping',
+
+  mappingStartRow: 25,
+  mappingEndRow: 50,
+
+  mappingColsToRead: 9,
+  ...
+};
+
+
+
+const start = CONFIG.mappingStartRow;
+const end = CONFIG.mappingEndRow;
+const count = end - start + 1;
+
+const rows = map.getRange(start, 1, count, CONFIG.mappingColsToRead).getValues();
