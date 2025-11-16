@@ -52,3 +52,10 @@ function buildHtmlTableForSheetMatches(sheetName, keyColName, keyValue) {
   tbl += '</table>';
   return tbl;
 }
+
+
+additionalStoreSheetName: 'Sheet3',   // sheet that contains STORE_ID column
+  storeKeyColumnName: 'STORE_ID',       // header text for store key in that sheet
+
+  additionalPodSheetName: 'Sheet4',     // sheet that contains POD ID column
+  podKeyColumnName: 'POD ID',      
