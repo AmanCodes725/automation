@@ -17,11 +17,11 @@ const CONFIG = {
   waitAfterSetMs: 2000,
   waitAfterSortMs: 400,
 
-  sheet3Name: 'Sheet3', // sheet3: match by column A (1) — has 11 columns total
+  sheet3Name: 'Sheet3', // sheet3: NOW -> light-blue header, 5th header red, percent-format numeric columns
   sheet3MatchCol: 1,
-  sheet3TotalCols: 11,  // used for header styling and last-col percentage
+  sheet3TotalCols: 11,  // used for header handling
 
-  sheet4Name: 'Sheet4', // sheet4: match by column B (2) — has 8 columns total
+  sheet4Name: 'Sheet4', // sheet4: NOW -> mixed header colors, only last column percent
   sheet4MatchCol: 2,
   sheet4TotalCols: 8
 };
@@ -64,15 +64,15 @@ function formatPercent(value) {
   return value;
 }
 
-/** Build Sheet4 HTML table: header light blue, 5th header text red, numeric -> percent, no-wrap
- *  (Sheet4 has percentage formatting for numeric columns)
+/** Build Sheet3 HTML table: light-blue header, 5th header red, numeric -> percent, no-wrap
+ *  (Sheet3 numeric columns formatted as percentage)
  */
-function buildSheet4Table(matchValue) {
+function buildSheet3Table(matchValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  const sh = ss.getSheetByName(CONFIG.sheet3Name);
   if (!sh) return '';
 
-  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols);
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet3TotalCols);
   const lastRow = sh.getLastRow();
   if (lastCol === 0 || lastRow < 2) return '';
 
@@ -81,7 +81,7 @@ function buildSheet4Table(matchValue) {
   // data
   const data = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
-  const matchColIdx0 = Math.max(0, CONFIG.sheet4MatchCol - 1);
+  const matchColIdx0 = Math.max(0, CONFIG.sheet3MatchCol - 1);
   const matches = data.filter(r => {
     const v = r[matchColIdx0];
     return v !== null && v !== undefined && String(v).trim() === String(matchValue).trim();
@@ -89,7 +89,7 @@ function buildSheet4Table(matchValue) {
   if (matches.length === 0) return '';
 
   // build HTML
-  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
   tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
 
   // header: light blue; 5th header text red (index 4)
@@ -101,7 +101,7 @@ function buildSheet4Table(matchValue) {
   }
   tbl += `</tr>`;
 
-  // rows
+  // rows: numeric cells formatted as percent
   matches.forEach(row => {
     tbl += `<tr>`;
     for (let c=0; c<lastCol; c++) {
@@ -117,29 +117,29 @@ function buildSheet4Table(matchValue) {
   return tbl;
 }
 
-/** Build Sheet3 HTML table: first 4 headers light orange, next 4 light green, remaining light gray.
+/** Build Sheet4 HTML table: first 4 headers light orange, next 4 light green, remaining light gray.
  *  All columns raw except LAST column formatted as percentage. No wrap.
  */
-function buildSheet3Table(matchValue) {
+function buildSheet4Table(matchValue) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(CONFIG.sheet3Name);
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
   if (!sh) return '';
 
-  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet3TotalCols);
+  const lastCol = Math.min(sh.getLastColumn(), CONFIG.sheet4TotalCols);
   const lastRow = sh.getLastRow();
   if (lastCol === 0 || lastRow < 2) return '';
 
   const header = sh.getRange(1,1,1,lastCol).getValues()[0];
   const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
 
-  const matchColIdx0 = Math.max(0, CONFIG.sheet3MatchCol - 1);
+  const matchColIdx0 = Math.max(0, CONFIG.sheet4MatchCol - 1);
   const matches = data.filter(r => {
     const v = r[matchColIdx0];
     return v !== null && v !== undefined && String(v).trim() === String(matchValue).trim();
   });
   if (matches.length === 0) return '';
 
-  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
   tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Arial;font-size:13px;width:100%;">`;
 
   // header row with mixed colors
@@ -249,11 +249,11 @@ function processFirst25StoreIds_SortD_Email() {
       // BUILD EMAIL HTML in order: Sheet4, Sheet3, Main table
       let emailHtml = '';
 
-      // 1) Sheet4 table first
+      // 1) Sheet4 table first (mixed header colors, last column percent)
       const sheet4Html = buildSheet4Table(storeId);
       if (sheet4Html) emailHtml += sheet4Html;
 
-      // 2) Sheet3 table next
+      // 2) Sheet3 table next (light-blue header + percent numeric)
       const sheet3Html = buildSheet3Table(storeId);
       if (sheet3Html) emailHtml += sheet3Html;
 
