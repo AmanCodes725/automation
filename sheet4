@@ -93,3 +93,6 @@ function buildSheet4Table(matchValue) {
   tbl += `</table>`;
   return tbl;
 }
+
+
+text-align:center;
