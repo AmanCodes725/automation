@@ -39,3 +39,14 @@ function getSheet4ConditionMessage(storeId) {
 
   return "";
 }
+
+
+
+let emailHtml = "";
+
+// greeting
+emailHtml += `<p style="font-size:14px;">Hi POD,</p>`;
+
+// conditional message from sheet4 column E
+const podMessage = getSheet4ConditionMessage(storeId);
+emailHtml += `<p style="font-size:13px;">${podMessage}</p>`;
