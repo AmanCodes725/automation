@@ -1,0 +1,523 @@
+/************************** CONFIG **************************/
+const CONFIG = {
+  mappingSheet: 'Mapping',
+  mappingColsToRead: 9,       // columns read from mapping: A..I
+
+  // mapping row range to send (inclusive)
+  mappingStartRow: 2,
+  mappingEndRow: 1101,        // set to last mapping row (1101 => 1100 rows if start=2)
+
+  // batch & trigger (tune for speed)
+  batchSize: 20,              // safe starting batch size; increase after testing
+  runIntervalMin: 1,          // trigger frequency in minutes (>=1)
+
+  // weekly sheet & control cell
+  weeklySheet: 'Weekly_View by Contribution',
+  controlCell: 'B3',
+  dataStartRow: 8,
+  dataStartCol: 1,
+  dataNumCols: 7,
+  sortColumn: 4,              // weekly sort by column D
+  sortAscending: false,
+  waitAfterSetMs: 700,        // reduced wait; increase to 1000 if your sheet needs more time
+
+  // sheet3 and sheet4 specifics
+  sheet3Name: 'Sheet3',
+  sheet3MatchCol: 1,
+  sheet3TotalCols: 11,
+
+  sheet4Name: 'Sheet4',
+  sheet4MatchCol: 2,
+  sheet4TotalCols: 8,
+
+  // top-N and extra CC logic (sheet4)
+  topN: 5,
+  extraCC1: 'extra1@example.com',
+  extraCC2: 'extra2@example.com'
+};
+/************************************************************/
+
+const FOOTER_NAME = 'Aman Shah';
+const FOOTER_TEAM = 'Instamart OPS Team';
+
+/****************** ON OPEN MENU ****************************/
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('FTR Audit')
+      .addItem('Run Single Batch', 'processSingleBatchForTesting')
+      .addItem('Start Batch Send', 'startBatchSend')
+      .addItem('Stop Batch Send', 'stopBatchSend')
+      .addToUi();
+  } catch (e) {
+    // no-op in non-UI context
+  }
+}
+
+/****************** UTILITIES ********************************/
+function appendResultRow(arr) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let results = ss.getSheetByName('Results');
+  if (!results) results = ss.insertSheet('Results');
+  results.appendRow([new Date()].concat(arr));
+}
+function formatPercent(value) {
+  if (value === null || value === "") return "";
+  if (typeof value === 'string' && value.trim().endsWith('%')) return value;
+  if (typeof value === 'number') {
+    if (value < 0 && value > -1) {
+      const pct = value * 100;
+      return (Math.round(pct * 10) / 10) + '%';
+    }
+    if (value >= 0 && value <= 1) {
+      const pct = value * 100;
+      return (Math.round(pct * 100) / 100) + '%';
+    }
+    return value;
+  }
+  // try parse numeric strings
+  const n = parseFloat(String(value).replace(/,/g,''));
+  if (!isNaN(n)) {
+    if (Math.abs(n) <= 1) return formatPercent(n);
+    return String(n) + '%';
+  }
+  return value;
+}
+
+/****************** BATCH STATS & SUMMARY ********************/
+function initBatchStats() {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('BATCH_SENT', '0');
+  props.setProperty('BATCH_ERRORS', '0');
+  props.setProperty('BATCH_SKIPPED', '0');
+  props.setProperty('BATCH_START_TS', String(new Date().getTime()));
+}
+function incrementBatchStat(statKey, by) {
+  by = (typeof by === 'number') ? by : 1;
+  const props = PropertiesService.getScriptProperties();
+  const map = { SENT: 'BATCH_SENT', ERROR: 'BATCH_ERRORS', SKIPPED: 'BATCH_SKIPPED' };
+  const key = map[statKey] || statKey;
+  const cur = Number(props.getProperty(key) || 0);
+  props.setProperty(key, String(cur + by));
+}
+function getBatchStats() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    sent: Number(props.getProperty('BATCH_SENT') || 0),
+    errors: Number(props.getProperty('BATCH_ERRORS') || 0),
+    skipped: Number(props.getProperty('BATCH_SKIPPED') || 0),
+    startTs: Number(props.getProperty('BATCH_START_TS') || 0)
+  };
+}
+function sendBatchSummaryEmail(reason) {
+  const stats = getBatchStats();
+  const started = stats.startTs ? new Date(stats.startTs) : null;
+  const ended = new Date();
+  const ownerEmail = (Session && Session.getEffectiveUser && Session.getEffectiveUser().getEmail()) || (CONFIG.extraCC1 || '');
+  const to = ownerEmail && ownerEmail.includes('@') ? ownerEmail : (CONFIG.extraCC1 || '');
+  const html = `
+    <p><b>Batch send summary</b></p>
+    <p>Reason: <b>${reason}</b></p>
+    <table border="0" cellpadding="4" style="font-family:Arial;font-size:13px;">
+      <tr><td><b>Started</b></td><td>${started ? started.toLocaleString() : 'N/A'}</td></tr>
+      <tr><td><b>Ended</b></td><td>${ended.toLocaleString()}</td></tr>
+      <tr><td><b>Total Sent</b></td><td>${stats.sent}</td></tr>
+      <tr><td><b>Total Errors</b></td><td>${stats.errors}</td></tr>
+      <tr><td><b>Total Skipped</b></td><td>${stats.skipped}</td></tr>
+    </table>
+    <p>See the <b>Results</b> sheet for details.</p>
+  `;
+  if (!to) {
+    appendResultRow(['SUMMARY_NO_RECIPIENT', reason, stats.sent, stats.errors, stats.skipped]);
+    return;
+  }
+  try {
+    MailApp.sendEmail({ to: to, subject: `Batch Send Summary — ${reason}`, htmlBody: html });
+    appendResultRow(['SUMMARY_SENT', reason, stats.sent, stats.errors, stats.skipped, to]);
+  } catch (e) {
+    appendResultRow(['SUMMARY_SEND_ERROR', reason, (e && e.message) ? e.message : String(e)]);
+  }
+}
+
+/****************** CACHING: read sheets once per batch *********/
+function cacheSheetsData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  const sh4 = ss.getSheetByName(CONFIG.sheet4Name);
+  const sheet4Header = (sh4 && sh4.getLastColumn() >= 1) ? sh4.getRange(1, 1, 1, sh4.getLastColumn()).getValues()[0] : [];
+  const sheet4All = (sh4 && sh4.getLastRow() >= 2) ? sh4.getRange(2, 1, sh4.getLastRow() - 1, sh4.getLastColumn()).getValues() : [];
+
+  const sh3 = ss.getSheetByName(CONFIG.sheet3Name);
+  const sheet3Header = (sh3 && sh3.getLastColumn() >= 1) ? sh3.getRange(1, 1, 1, sh3.getLastColumn()).getValues()[0] : [];
+  const sheet3All = (sh3 && sh3.getLastRow() >= 2) ? sh3.getRange(2, 1, sh3.getLastRow() - 1, sh3.getLastColumn()).getValues() : [];
+
+  const weekly = ss.getSheetByName(CONFIG.weeklySheet);
+  const weeklyAll = (weekly && weekly.getLastRow() >= CONFIG.dataStartRow)
+    ? weekly.getRange(CONFIG.dataStartRow, CONFIG.dataStartCol, Math.max(0, weekly.getLastRow() - CONFIG.dataStartRow + 1), CONFIG.dataNumCols).getValues()
+    : [];
+
+  return {
+    sheet4Header, sheet4All,
+    sheet3Header, sheet3All,
+    weeklyAll
+  };
+}
+
+/****************** BUILD TABLES FROM CACHE *******************/
+function buildSheet4TableFromCache(matchValue, header, dataArray) {
+  if (!dataArray || dataArray.length === 0) return '';
+  const matchColIdx = (CONFIG.sheet4MatchCol || 2) - 1;
+  const matches = dataArray.filter(r => String(r[matchColIdx]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return '';
+  const lastCol = header.length;
+  const last4Start = Math.max(0, lastCol - 4);
+
+  function toPercent(val) {
+    if (val === "" || val === null || val === undefined) return "";
+    if (typeof val === 'string' && val.trim().endsWith('%')) return val.trim();
+    let raw = val;
+    if (typeof raw === 'string') raw = raw.replace(/,/g, '').trim();
+    const n = parseFloat(raw);
+    if (isNaN(n)) return val;
+    if (Math.abs(n) <= 1) return formatPercent(n);
+    return String(n) + "%";
+  }
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet4Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+  tbl += `<tr style="font-weight:bold;text-align:center;">`;
+  for (let h = 0; h < lastCol; h++) {
+    let bg = "#F0F0F0";
+    if (h < 4) bg = "#FFD8A8";
+    else if (h < 8) bg = "#D6F5D6";
+    tbl += `<th style="padding:6px;border:1px solid #000;background:${bg};white-space:nowrap;text-align:center;">${header[h]||''}</th>`;
+  }
+  tbl += `</tr>`;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      const display = (c >= last4Start) ? toPercent(cell) : cell;
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+function buildSheet3TableFromCache(matchValue, header, dataArray) {
+  if (!dataArray || dataArray.length === 0) return '';
+  const matchColIdx = (CONFIG.sheet3MatchCol || 1) - 1;
+  const matches = dataArray.filter(r => String(r[matchColIdx]).trim() === String(matchValue).trim());
+  if (matches.length === 0) return '';
+  const lastCol = header.length;
+  const lastIndex = lastCol - 1;
+
+  let tbl = `<p style="margin-top:12px;"><b>${CONFIG.sheet3Name} - Matching ID: ${matchValue}</b></p>`;
+  tbl += `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">`;
+  tbl += `<tr style="background:#D9EDF7;font-weight:bold;text-align:center;">`;
+  for (let h = 0; h < lastCol; h++) {
+    const extra = (h === 4) ? "color:red;" : "";
+    tbl += `<th style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;${extra}">${header[h]||''}</th>`;
+  }
+  tbl += `</tr>`;
+
+  matches.forEach(row => {
+    tbl += `<tr>`;
+    for (let c = 0; c < lastCol; c++) {
+      const cell = (row[c] === null || row[c] === undefined) ? '' : row[c];
+      let display;
+      if (c === lastIndex) {
+        if (typeof cell === 'string' && cell.trim().endsWith('%')) display = cell.trim();
+        else if (typeof cell === 'number') display = formatPercent(cell);
+        else {
+          const n = parseFloat(String(cell).replace(/,/g,'').trim());
+          display = (!isNaN(n)) ? (Math.abs(n) <= 1 ? formatPercent(n) : String(n) + '%') : cell;
+        }
+      } else {
+        display = cell;
+      }
+      tbl += `<td style="padding:6px;border:1px solid #000;text-align:center;white-space:nowrap;">${display}</td>`;
+    }
+    tbl += `</tr>`;
+  });
+
+  tbl += `</table>`;
+  return tbl;
+}
+
+/****************** SHEET4: sort & topN check *****************/
+function sortSheet4ByE() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CONFIG.sheet4Name);
+  if (!sh) return;
+  const lastRow = sh.getLastRow();
+  const lastCol = sh.getLastColumn();
+  if (lastRow < 2) return;
+  try {
+    sh.getRange(2, 1, lastRow - 1, Math.max(lastCol, 1)).sort({ column: 5, ascending: true });
+  } catch (e) {
+    Logger.log('sortSheet4ByE error: ' + (e && e.message ? e.message : e));
+  }
+}
+function isStoreInSheet4TopNFromCache(storeId, header, dataArray, topN) {
+  if (!dataArray || dataArray.length === 0) return false;
+  const matchColIdx = (CONFIG.sheet4MatchCol || 2) - 1;
+  const rows = dataArray.slice(0, topN);
+  for (let i = 0; i < rows.length; i++) {
+    const v = rows[i][matchColIdx];
+    if (v !== null && v !== undefined && String(v).trim() === String(storeId).trim()) return true;
+  }
+  return false;
+}
+
+/****************** EMAIL BUILD (from cache) ******************/
+function getSheet4ConditionMessageFromCache(storeId, sheet4Header, sheet4Data) {
+  const matchCol = (CONFIG.sheet4MatchCol || 2) - 1;
+  for (let i = 0; i < sheet4Data.length; i++) {
+    if (String(sheet4Data[i][matchCol]).trim() === String(storeId).trim()) {
+      let v = sheet4Data[i][4]; // column E
+      if (typeof v === 'string' && v.endsWith('%')) v = parseFloat(v.replace('%',''));
+      if (typeof v === 'number' && Math.abs(v) <= 1) v = v * 100;
+      if (v > 99.5) return "All KPIs are healthy. Please continue the good work.";
+      else return "Immediate action required. KPIs are below threshold.";
+    }
+  }
+  return "";
+}
+
+function buildEmailForStoreFromCache(storeId, cache) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const weekly = ss.getSheetByName(CONFIG.weeklySheet);
+
+    // set control cell so weekly filters recalc (we still need to set B3)
+    if (weekly) {
+      const ctrl = weekly.getRange(CONFIG.controlCell);
+      const oldDV = ctrl.getDataValidation();
+      try { if (oldDV) ctrl.setDataValidation(null); } catch(e){}
+      ctrl.setValue(storeId);
+      SpreadsheetApp.flush();
+      Utilities.sleep(CONFIG.waitAfterSetMs);
+      try { if (oldDV) ctrl.setDataValidation(oldDV); } catch(e){}
+    }
+
+    // build header message
+    let emailHtml = "";
+    emailHtml += `<p style="font-size:14px;">Hi POD,</p>`;
+    emailHtml += `<p style="font-size:13px;">${getSheet4ConditionMessageFromCache(storeId, cache.sheet4Header, cache.sheet4All)}</p>`;
+
+    // use cached sheet4 & sheet3 HTML builders
+    const sheet4Html = buildSheet4TableFromCache(storeId, cache.sheet4Header, cache.sheet4All);
+    if (sheet4Html) emailHtml += sheet4Html;
+
+    const sheet3Html = buildSheet3TableFromCache(storeId, cache.sheet3Header, cache.sheet3All);
+    if (sheet3Html) emailHtml += sheet3Html;
+
+    // Instant audit table from cached weekly array (we keep previous visible logic, from first 20)
+    const weeklyAll = cache.weeklyAll || [];
+    const first20 = weeklyAll.slice(0, 20);
+    const visible = first20.filter(r => {
+      const d = r[3];
+      if (d === null || d === '') return false;
+      const nums = [r[3], r[4], r[5], r[6]].map(Number);
+      return !nums.every(n => n === 0);
+    });
+
+    emailHtml += `<p><b>Instant audit needed</b></p>
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial;font-size:13px;">
+      <tr style="background:#FFFF00;font-weight:bold;text-align:center;">
+        <th style="border:1px solid #000;text-align:center;">L2 Category</th>
+        <th style="border:1px solid #000;text-align:center;">L1 Category</th>
+        <th style="border:1px solid #000;text-align:center;">Contribution</th>
+      </tr>`;
+
+    visible.forEach(r => {
+      const d = r[3];
+      const dDisplay = (typeof d === "string" && d.trim().endsWith('%')) ? d : ((typeof d === "number") ? formatPercent(d) : d);
+      emailHtml += `<tr>
+        <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${r[0] || ""}</td>
+        <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${r[1] || ""}</td>
+        <td style="border:1px solid #000;text-align:center;white-space:nowrap;">${dDisplay}</td>
+      </tr>`;
+    });
+
+    emailHtml += `</table>`;
+    emailHtml += `<p><br>Thanks & Regards,<br>${FOOTER_NAME}<br>${FOOTER_TEAM}</p>`;
+
+    return { html: emailHtml, visibleCount: visible.length };
+  } catch (e) {
+    appendResultRow(['BUILD_EMAIL_ERROR', storeId, (e && e.message) ? e.message : String(e)]);
+    return { html: '', visibleCount: 0, error: e };
+  }
+}
+
+/****************** BATCH SYSTEM: start/stop/send ************/
+function startBatchSend() {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('BATCH_POS', String(CONFIG.mappingStartRow));
+  props.setProperty('BATCH_RUNNING', '1');
+  initBatchStats();
+  createOrReplaceTrigger_OncePerMinutes(CONFIG.runIntervalMin);
+  SpreadsheetApp.getUi && SpreadsheetApp.getUi().alert('Batch send started.');
+}
+
+function stopBatchSend() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('BATCH_RUNNING');
+  props.deleteProperty('BATCH_POS');
+  sendBatchSummaryEmail('STOPPED_BY_USER');
+  deleteTriggersByName('sendNextBatch');
+  SpreadsheetApp.getUi && SpreadsheetApp.getUi().alert('Batch send stopped.');
+}
+
+function sendNextBatch() {
+  const props = PropertiesService.getScriptProperties();
+  const running = props.getProperty('BATCH_RUNNING');
+  if (!running || running !== '1') {
+    deleteTriggersByName('sendNextBatch');
+    return;
+  }
+
+  let pos = Number(props.getProperty('BATCH_POS') || CONFIG.mappingStartRow);
+  const endRow = Number(CONFIG.mappingEndRow);
+  if (pos > endRow) {
+    props.deleteProperty('BATCH_RUNNING');
+    deleteTriggersByName('sendNextBatch');
+    appendResultRow(['BATCH_COMPLETE', pos]);
+    sendBatchSummaryEmail('FINISHED');
+    return;
+  }
+
+  // check remaining daily quota
+  const remaining = MailApp.getRemainingDailyQuota();
+  if (remaining <= 0) {
+    appendResultRow(['PAUSED_NO_QUOTA', pos]);
+    sendBatchSummaryEmail('PAUSED_NO_QUOTA');
+    return;
+  }
+
+  // sorting sheet4 once per batch (fast)
+  try { sortSheet4ByE(); } catch(e) { Logger.log('sort error: ' + e); }
+  // small wait for sort to stabilise (kept short)
+  Utilities.sleep(250);
+
+  // cache sheet data once
+  const cache = cacheSheetsData();
+
+  // compute how many to process this run
+  const batchSize = Math.min(CONFIG.batchSize, endRow - pos + 1);
+  const toProcess = Math.min(batchSize, Math.max(1, remaining)); // avoid exceeding quota
+
+  // read mapping rows for this batch
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const map = ss.getSheetByName(CONFIG.mappingSheet);
+  if (!map) {
+    appendResultRow(['ERROR', 'MAPPING_SHEET_NOT_FOUND']);
+    props.deleteProperty('BATCH_RUNNING');
+    deleteTriggersByName('sendNextBatch');
+    return;
+  }
+  const rows = map.getRange(pos, 1, toProcess, CONFIG.mappingColsToRead).getValues();
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const storeId = String(row[0] || '').trim();
+    const podId = String(row[1] || '').trim();
+    const SM = String(row[4] || '').trim();
+    const COM = String(row[5] || '').trim();
+    const DCH = String(row[6] || '').trim();
+    const PIM = String(row[7] || '').trim();
+    const POD = String(row[8] || '').trim();
+
+    if (!storeId) {
+      appendResultRow(['SKIPPED_EMPTY_STOREID', pos + i]);
+      incrementBatchStat('SKIPPED', 1);
+      continue;
+    }
+
+    // build email using cached data
+    const built = buildEmailForStoreFromCache(storeId, cache);
+    if (!built.html) {
+      appendResultRow(['NO_EMAIL_BODY', storeId, pos + i]);
+      incrementBatchStat('SKIPPED', 1);
+      continue;
+    }
+
+    // prepare recipients
+    const toList = [];
+    if (SM && SM.includes('@')) toList.push(SM);
+    if (POD && POD.includes('@')) toList.push(POD);
+
+    const ccList = [];
+    if (COM && COM.includes('@')) ccList.push(COM);
+    if (DCH && DCH.includes('@')) ccList.push(DCH);
+    if (PIM && PIM.includes('@')) ccList.push(PIM);
+
+    // decide extra cc based on sheet4 top-N using cached sheet4All
+    const storeInTopN = isStoreInSheet4TopNFromCache(storeId, cache.sheet4Header, cache.sheet4All, Number(CONFIG.topN || 5));
+    if (storeInTopN) {
+      if (CONFIG.extraCC1) ccList.push(CONFIG.extraCC1);
+      if (CONFIG.extraCC2) ccList.push(CONFIG.extraCC2);
+    }
+
+    const toStr = toList.join(',');
+    const ccStr = ccList.join(',');
+
+    if (!toStr && !ccStr) {
+      appendResultRow(['SKIPPED_NO_RECIPIENTS', storeId, pos + i]);
+      incrementBatchStat('SKIPPED', 1);
+      continue;
+    }
+
+    try {
+      MailApp.sendEmail({ to: toStr || '', cc: ccStr || '', subject: `Weekly Audit Required: Store ${storeId}`, htmlBody: built.html });
+      appendResultRow(['SENT', storeId, pos + i, built.visibleCount, storeInTopN ? 'extraCC' : 'regular']);
+      incrementBatchStat('SENT', 1);
+    } catch (sendErr) {
+      appendResultRow(['SEND_ERROR', storeId, pos + i, (sendErr && sendErr.message) ? sendErr.message : String(sendErr)]);
+      incrementBatchStat('ERROR', 1);
+    }
+  }
+
+  // advance pointer
+  pos = pos + toProcess;
+  props.setProperty('BATCH_POS', String(pos));
+
+  if (pos > endRow) {
+    props.deleteProperty('BATCH_RUNNING');
+    deleteTriggersByName('sendNextBatch');
+    appendResultRow(['BATCH_FINISHED', pos]);
+    sendBatchSummaryEmail('FINISHED');
+  }
+}
+
+/****************** TRIGGER HELPERS **************************/
+function createOrReplaceTrigger_OncePerMinutes(minutes) {
+  deleteTriggersByName('sendNextBatch');
+  ScriptApp.newTrigger('sendNextBatch').timeBased().everyMinutes(minutes).create();
+}
+function deleteTriggersByName(fnName) {
+  const all = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < all.length; i++) {
+    const t = all[i];
+    if (t.getHandlerFunction() === fnName) ScriptApp.deleteTrigger(t);
+  }
+}
+
+/****************** HELPER: single-run for testing ***********/
+function processSingleBatchForTesting() {
+  // set a single-run batch starting at mappingStartRow with batchSize rows
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty('BATCH_POS', String(CONFIG.mappingStartRow));
+  props.setProperty('BATCH_RUNNING', '1');
+  initBatchStats();
+  sendNextBatch();
+  props.deleteProperty('BATCH_RUNNING');
+  appendResultRow(['SINGLE_RUN_COMPLETE']);
+}
+
+/****************** END OF SCRIPT ****************************/
